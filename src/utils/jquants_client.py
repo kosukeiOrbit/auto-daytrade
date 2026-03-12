@@ -1,7 +1,9 @@
 """
 J-Quants API クライアント
 """
-from jquants_api_client import JQuantsAPIClient
+import jquantsapi
+from datetime import datetime
+from dateutil import tz
 from loguru import logger
 from .config import Config
 
@@ -12,7 +14,7 @@ class JQuantsClient:
     def __init__(self):
         """初期化"""
         Config.validate()
-        self.client = JQuantsAPIClient(refresh_token=Config.JQUANTS_REFRESH_TOKEN)
+        self.client = jquantsapi.ClientV2(api_key=Config.JQUANTS_API_KEY)
         logger.info("J-Quants API クライアントを初期化しました")
 
     def test_connection(self):
@@ -57,18 +59,31 @@ class JQuantsClient:
 
         Args:
             code: 銘柄コード（省略時は全銘柄）
-            date: 日付（YYYY-MM-DD形式、省略時は最新）
+            date: 日付（datetime形式、省略時は今日）
 
         Returns:
             DataFrame: 株価データ
         """
         try:
-            logger.info(f"日次株価データを取得中... (code={code}, date={date})")
-            df = self.client.get_price_range(
-                start_dt=date,
-                end_dt=date,
-                code=code
-            ) if date else self.client.get_prices_daily_quotes(code=code)
+            # dateが指定されていない場合は今日の日付を使用
+            if date is None:
+                date = datetime.now(tz.gettz("Asia/Tokyo"))
+                logger.info(f"日付未指定のため今日の日付を使用: {date.strftime('%Y-%m-%d')}")
+
+            logger.info(f"日次株価データを取得中... (code={code}, date={date.strftime('%Y-%m-%d') if date else None})")
+
+            if code:
+                # 特定銘柄の場合はget_eq_bars_dailyを使用
+                df = self.client.get_eq_bars_daily(
+                    code=code,
+                    date_yyyymmdd=date.strftime('%Y%m%d')
+                )
+            else:
+                # 全銘柄の場合はget_eq_bars_daily_rangeを使用
+                df = self.client.get_eq_bars_daily_range(
+                    start_dt=date,
+                    end_dt=date
+                )
 
             logger.success(f"日次株価データを取得しました: {len(df)}件")
             return df

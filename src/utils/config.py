@@ -15,7 +15,7 @@ class Config:
     """環境変数から設定を取得"""
 
     # J-Quants API
-    JQUANTS_REFRESH_TOKEN = os.getenv('JQUANTS_REFRESH_TOKEN')
+    JQUANTS_API_KEY = os.getenv('JQUANTS_API_KEY')
 
     # kabu Station API (フェーズ5で使用)
     KABU_API_URL = os.getenv('KABU_API_URL', 'http://localhost:18080/kabusapi')
@@ -24,8 +24,8 @@ class Config:
     @classmethod
     def validate(cls):
         """必須の設定が存在するかチェック"""
-        if not cls.JQUANTS_REFRESH_TOKEN:
+        if not cls.JQUANTS_API_KEY:
             raise ValueError(
-                "JQUANTS_REFRESH_TOKEN が設定されていません。\n"
+                "JQUANTS_API_KEY が設定されていません。\n"
                 ".env ファイルを作成して設定してください。"
             )
