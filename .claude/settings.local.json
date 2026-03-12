@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude --version)",
+      "Bash(dir:*)",
+      "Bash(git init:*)",
+      "Bash(python -m venv:*)",
+      "Bash(venvScriptsactivate)",
+      "Bash(pip install:*)",
+      "Bash(.\\venv\\Scripts\\python.exe -m pip install:*)",
+      "Bash(venv/Scripts/python.exe -m pip:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}
