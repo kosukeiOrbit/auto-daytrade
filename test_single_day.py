@@ -1,7 +1,7 @@
 """
-改善版バックテストテスト（短期間・API制限回避）
+単一日バックテストテスト（API制限回避）
 """
-from datetime import datetime, timedelta
+from datetime import datetime
 from dateutil import tz
 from loguru import logger
 from src.backtest import IntegratedBacktest, BacktestVisualizer
@@ -10,17 +10,16 @@ from src.backtest import IntegratedBacktest, BacktestVisualizer
 def main():
     """メイン処理"""
     logger.info("=" * 60)
-    logger.info("改善版バックテストテスト開始")
+    logger.info("単一日バックテストテスト開始")
     logger.info("=" * 60)
 
     # 日本時間
     jst = tz.gettz("Asia/Tokyo")
 
-    # テスト期間: 過去3営業日（API制限回避のため短縮）
-    end_date = datetime.now(jst)
-    start_date = end_date - timedelta(days=5)  # 5日前から（営業日3日程度）
+    # テスト期間: 2026-03-05（エントリーが発生した日）
+    test_date = datetime(2026, 3, 5, tzinfo=jst)
 
-    logger.info(f"\nテスト期間: {start_date.strftime('%Y-%m-%d')} 〜 {end_date.strftime('%Y-%m-%d')}")
+    logger.info(f"\nテスト日: {test_date.strftime('%Y-%m-%d')}")
     logger.info("注: 日足OHLCVを使った近似バックテストです（5分足データではありません）")
 
     # 統合バックテスト初期化
@@ -29,8 +28,8 @@ def main():
     # バックテスト実行
     try:
         metrics = backtest.run_historical_backtest(
-            start_date=start_date,
-            end_date=end_date,
+            start_date=test_date,
+            end_date=test_date,
             budget=500_000,
             min_change_rate=3.0,
             top_n=20
@@ -40,18 +39,21 @@ def main():
         logger.info("\n")
         metrics.display()
 
-        # 合格基準チェック
-        logger.info("\n")
-        passed = metrics.passes_criteria()
-
-        if passed:
-            logger.success("✓ 全ての合格基準をクリアしました！")
-        else:
-            logger.warning("✗ 一部の基準を満たしていません（日足データでの近似シミュレーションのため）")
+        # トレード詳細表示
+        if len(backtest.simulator.trades) > 0:
+            logger.info("\n=== トレード詳細 ===")
+            for i, trade in enumerate(backtest.simulator.trades, 1):
+                logger.info(f"トレード {i}:")
+                logger.info(f"  銘柄: {trade.symbol}")
+                logger.info(f"  エントリー: {trade.entry_price:.0f}円 ({trade.entry_time.strftime('%Y-%m-%d')})")
+                logger.info(f"  決済: {trade.exit_price:.0f}円 ({trade.exit_reason})")
+                logger.info(f"  数量: {trade.quantity}株")
+                logger.info(f"  損益: {trade.profit_loss:+,.0f}円 ({trade.profit_loss_rate:+.2f}%)")
+                logger.info("")
 
         # 可視化実行
         if len(backtest.simulator.trades) > 0:
-            logger.info("\n可視化処理実行中...")
+            logger.info("可視化処理実行中...")
             visualizer = BacktestVisualizer(
                 trades=backtest.simulator.trades,
                 metrics=metrics
