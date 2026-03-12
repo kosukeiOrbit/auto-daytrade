@@ -88,74 +88,91 @@ class IntegratedBacktest:
 
                 logger.info(f"  候補銘柄: {len(candidates)}銘柄")
 
-                # 2. 各候補銘柄でエントリー判定（簡易版：日次データのみ）
-                # ※注：本来は5分足データが必要だが、今回は日次データで簡易判定
+                # 2. 各候補銘柄でエントリー判定（日足ベースの近似バックテスト）
+                # ※注意: これは日足OHLCVを使った「近似シミュレーション」です
+                # 本物の5分足バックテストではありません。あくまで傾向把握用です。
                 for idx, row in candidates.head(3).iterrows():  # 上位3銘柄のみ
                     symbol = row['Code']
-                    current_price = row['C']
-                    prev_close = row['C'] - (row['C'] * row['ChangeRate'] / 100)
-
-                    # 簡易的なOHLCVデータ作成（本来は5分足）
-                    ohlcv = [{
-                        "time": trade_date.strftime('%Y-%m-%d'),
-                        "open": row['O'],
-                        "high": row['H'],
-                        "low": row['L'],
-                        "close": row['C'],
-                        "volume": row['Vo']
-                    }]
-
-                    # エントリー判定（簡易版）
-                    # 注：本来は5分足データで判定するが、今回は日次データのみ
-                    # VWAPタッチ判定などは省略
+                    open_price = row['O']  # 始値
+                    high_price = row['H']  # 高値
+                    low_price = row['L']   # 安値
+                    close_price = row['C'] # 終値
+                    prev_close = close_price - (close_price * row['ChangeRate'] / 100)
 
                     # 既にポジションがある場合はスキップ
                     if self.simulator.current_trade is not None:
                         continue
 
-                    # 単純な条件でエントリー判定
-                    if row['ChangeRate'] >= min_change_rate and row['ChangeRate'] <= 8.0:
-                        # エントリー実行
-                        entry_price = current_price
-                        stop_loss = entry_price * 0.99  # -1%
-                        take_profit = entry_price * 1.02  # +2%
+                    # エントリー条件チェック（日足ベース）
 
-                        success = self.simulator.open_trade(
-                            symbol=symbol,
-                            entry_time=trade_date,
-                            entry_price=entry_price,
-                            stop_loss=stop_loss,
-                            take_profit=take_profit
+                    # 1. 寄り付きギャップアップが+8%超なら除外
+                    gap_rate = (open_price - prev_close) / prev_close * 100
+                    if gap_rate > 8.0:
+                        continue
+
+                    # 2. スクリーニング条件（前日比+3%〜+8%）を満たすか
+                    if row['ChangeRate'] < min_change_rate or row['ChangeRate'] > 8.0:
+                        continue
+
+                    # 3. VWAP近似値チェック（日足ベース）
+                    # 日足VWAP近似 = (H + L + C) / 3
+                    vwap_approx = (high_price + low_price + close_price) / 3
+
+                    # 始値がVWAP近似値を上回っているかチェック
+                    if open_price < vwap_approx:
+                        continue
+
+                    # エントリー実行（始値でエントリー）
+                    entry_price = open_price
+                    stop_loss = entry_price * 0.99  # -1%
+                    take_profit = entry_price * 1.02  # +2%
+
+                    success = self.simulator.open_trade(
+                        symbol=symbol,
+                        entry_time=trade_date,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        take_profit=take_profit
+                    )
+
+                    if success:
+                        logger.info(f"    エントリー: {symbol} @{entry_price:.0f}円 (始値)")
+
+                        # 3. 決済判定（当日の高値・安値・終値で判定）
+                        # 注: これは日足ベースの近似です。実際の時系列順序は考慮していません。
+
+                        exit_price = None
+                        exit_reason = None
+
+                        # 利確判定: take_profit が当日高値以下なら利確成立
+                        if take_profit <= high_price:
+                            exit_price = take_profit
+                            exit_reason = "take_profit"
+
+                        # 損切判定: stop_loss が当日安値以上なら損切成立
+                        elif stop_loss >= low_price:
+                            exit_price = stop_loss
+                            exit_reason = "stop_loss"
+
+                        # どちらも発動しない場合: 終値で決済（日またぎ禁止）
+                        else:
+                            exit_price = close_price
+                            exit_reason = "time_exit"
+
+                        # 決済実行
+                        self.simulator.close_trade(
+                            exit_time=trade_date,
+                            exit_price=exit_price,
+                            exit_reason=exit_reason
                         )
 
-                        if success:
-                            logger.info(f"    エントリー: {symbol} @{entry_price:.0f}円")
-                            break  # 1日1銘柄のみ
+                        logger.info(f"    決済: {symbol} @{exit_price:.0f}円 ({exit_reason})")
 
-                # 3. 決済チェック（当日終値で判定）
-                if self.simulator.current_trade is not None:
-                    # 当日終値を取得
-                    current_symbol = self.simulator.current_trade.symbol
-                    exit_row = candidates[candidates['Code'] == current_symbol]
-
-                    if len(exit_row) > 0:
-                        exit_price = exit_row.iloc[0]['C']
-
-                        # 決済判定
-                        exited = self.simulator.check_exit(trade_date, exit_price)
-
-                        if not exited:
-                            # 当日終値で強制決済（日またぎ禁止）
-                            self.simulator.force_close_all(trade_date, exit_price)
+                        break  # 1日1銘柄のみ
 
             except Exception as e:
                 logger.error(f"  エラー: {e}")
                 continue
-
-        # 残ポジションがあれば強制決済
-        if self.simulator.current_trade is not None:
-            logger.warning("残ポジションを強制決済")
-            self.simulator.force_close_all(end_date, self.simulator.current_trade.entry_price)
 
         # パフォーマンス計算
         logger.info("\n" + "=" * 60)
