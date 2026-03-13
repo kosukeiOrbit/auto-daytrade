@@ -19,38 +19,20 @@ class TDnetScraper:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
 
-    def get_after_hours_disclosures(self, target_date=None):
+    def _fetch_disclosures_for_date(self, date):
         """
-        引け後の適時開示を取得（前日15:30〜当日6:00）
+        指定日の適時開示一覧を取得する
 
         Args:
-            target_date: 対象日（datetime）。Noneの場合は今日
+            date: 対象日 (datetime)
 
         Returns:
-            list: [{
-                'code': 銘柄コード,
-                'company': 会社名,
-                'title': 開示タイトル,
-                'time': 開示時刻,
-                'url': PDF URL
-            }, ...]
+            list: 開示情報のリスト（生データ）
         """
-        if target_date is None:
-            jst = tz.gettz("Asia/Tokyo")
-            target_date = datetime.now(jst)
-
-        # 前日15:30〜当日6:00の開示を取得
-        prev_date = target_date - timedelta(days=1)
-
-        logger.info(f"TDnet引け後開示取得: {prev_date.strftime('%Y-%m-%d')} 15:30 〜 {target_date.strftime('%Y-%m-%d')} 06:00")
-
-        disclosures = []
+        date_str = date.strftime('%Y%m%d')
+        url = f"{self.base_url}/I_list_001_{date_str}.html"
 
         try:
-            # TDnetの検索ページにアクセス
-            # ※実際のTDnet APIは認証が必要なため、tdnet.infoを使用
-            url = "https://www.release.tdnet.info/inbs/I_list_001_1F.html"
-
             response = requests.get(url, headers=self.headers, timeout=10)
             response.raise_for_status()
 
@@ -59,64 +41,106 @@ class TDnetScraper:
             # テーブルから開示情報を抽出
             table = soup.find('table', class_='kjContents')
             if not table:
-                logger.warning("TDnetのテーブルが見つかりませんでした")
+                logger.warning(f"TDnetのテーブルが見つかりませんでした: {date_str}")
                 return []
 
             rows = table.find_all('tr')[1:]  # ヘッダー行をスキップ
 
+            disclosures = []
             for row in rows:
                 cols = row.find_all('td')
                 if len(cols) < 4:
                     continue
 
-                # 時刻・銘柄コード・会社名・タイトル抽出
                 time_str = cols[0].get_text(strip=True)
                 code = cols[1].get_text(strip=True)
                 company = cols[2].get_text(strip=True)
                 title = cols[3].get_text(strip=True)
 
-                # 開示時刻をパース
+                pdf_link = cols[3].find('a')
+                pdf_url = pdf_link['href'] if pdf_link else ''
+
                 try:
+                    jst = tz.gettz('Asia/Tokyo')
                     disclosure_time = datetime.strptime(
-                        f"{target_date.strftime('%Y-%m-%d')} {time_str}",
+                        f"{date.strftime('%Y-%m-%d')} {time_str}",
                         '%Y-%m-%d %H:%M'
-                    )
+                    ).replace(tzinfo=jst)
                 except ValueError:
                     continue
 
-                # 15:30〜翌朝6:00の範囲内かチェック
-                after_hours_start = prev_date.replace(hour=15, minute=30, second=0)
-                next_morning = target_date.replace(hour=6, minute=0, second=0)
+                disclosures.append({
+                    'code': code,
+                    'company': company,
+                    'title': title,
+                    'time': time_str,
+                    'datetime': disclosure_time,
+                    'url': pdf_url,
+                    'date': date_str,
+                })
 
-                if not (after_hours_start <= disclosure_time <= next_morning):
-                    continue
-
-                # 対象となる開示種別かチェック
-                if self._is_target_disclosure(title):
-                    # PDF URLを取得
-                    pdf_link = cols[3].find('a')
-                    pdf_url = pdf_link['href'] if pdf_link else None
-
-                    disclosures.append({
-                        'code': code,
-                        'company': company,
-                        'title': title,
-                        'time': disclosure_time.strftime('%H:%M'),
-                        'url': pdf_url
-                    })
-
-                    logger.info(f"  {code} {company}: {title}")
-
-            logger.success(f"引け後開示: {len(disclosures)}件")
             return disclosures
 
         except Exception as e:
-            logger.error(f"TDnet取得エラー: {e}")
+            logger.error(f"TDnetデータ取得エラー ({date_str}): {e}")
             return []
+
+    def get_after_hours_disclosures(self, target_date=None):
+        """
+        引け後の適時開示を取得（前日15:30〜当日6:00）
+
+        前日ページと当日ページの両方を取得してマージし、
+        15:30〜翌6:00の範囲でフィルタする。
+
+        Args:
+            target_date: 対象日 (datetime)。Noneの場合は今日
+
+        Returns:
+            list: [{'code', 'company', 'title', 'time', 'url'}, ...]
+        """
+        jst = tz.gettz('Asia/Tokyo')
+        if target_date is None:
+            target_date = datetime.now(jst)
+
+        # 前日を計算（土日をスキップして金曜日へ）
+        prev_date = target_date - timedelta(days=1)
+        while prev_date.weekday() >= 5:
+            prev_date -= timedelta(days=1)
+
+        # フィルタ範囲
+        after_hours_start = prev_date.replace(hour=15, minute=30, second=0, tzinfo=jst)
+        next_morning = target_date.replace(hour=6, minute=0, second=0, tzinfo=jst)
+
+        logger.info(
+            f"TDnet引け後開示取得: "
+            f"{prev_date.strftime('%Y-%m-%d')} 15:30 〜 "
+            f"{target_date.strftime('%Y-%m-%d')} 06:00"
+        )
+
+        # 前日ページと当日ページ両方を取得してマージ
+        all_disclosures = []
+        all_disclosures.extend(self._fetch_disclosures_for_date(prev_date))
+        time.sleep(0.5)  # サーバー負荷対策
+        all_disclosures.extend(self._fetch_disclosures_for_date(target_date))
+
+        logger.info(f"取得した全開示件数（フィルタ前）: {len(all_disclosures)}件")
+
+        # 時刻範囲 + ポジティブキーワードでフィルタ
+        filtered = []
+        for d in all_disclosures:
+            dt = d.get('datetime')
+            if dt is None:
+                continue
+            if after_hours_start <= dt <= next_morning:
+                if self._is_target_disclosure(d['title']):
+                    filtered.append(d)
+
+        logger.info(f"引け後開示（ポジティブ）: {len(filtered)}件")
+        return filtered
 
     def _is_target_disclosure(self, title):
         """
-        対象となる開示種別かを判定
+        対象となる開示かチェック
 
         Args:
             title: 開示タイトル
@@ -124,36 +148,20 @@ class TDnetScraper:
         Returns:
             bool: 対象の場合True
         """
-        # 対象となるキーワード
         target_keywords = [
-            '業績予想',
-            '上方修正',
-            '決算短信',
-            '株式分割',
-            '自己株式',
-            '自社株買い',
-            '株主優待'
+            '業績予想', '上方修正', '決算短信',
+            '株式分割', '自己株式', '自社株買い', '株主優待',
         ]
-
-        # 除外キーワード
         exclude_keywords = [
-            '下方修正',
-            '赤字',
-            '損失',
-            '延期',
-            '訂正'
+            '下方修正', '赤字', '損失', '延期', '訂正',
         ]
 
-        # 除外チェック
         for keyword in exclude_keywords:
             if keyword in title:
                 return False
-
-        # 対象チェック
         for keyword in target_keywords:
             if keyword in title:
                 return True
-
         return False
 
     def get_disclosure_codes(self, target_date=None):
