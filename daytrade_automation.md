@@ -462,6 +462,104 @@ def check_entry(symbol: str, ohlcv: list, current_price: float, prev_close: floa
 
 ---
 
+## システムシーケンス図
+
+朝スクリーニング（morning_screening.py）の実行フローを可視化したシーケンス図です。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant TS as Windowsタスクスケジューラ
+    participant MS as morning_screening.py
+    participant SC as Screener<br/>(screener.py)
+    participant JQ as J-Quants API
+    participant TD as TDnet<br/>(tdnet_scraper.py)
+    participant MK as MarketSentiment<br/>(market_sentiment.py)
+    participant YF as Yahoo Finance API
+    participant NS as NewsScraper<br/>(news_scraper.py)
+    participant KB as 株探
+    participant MJ as MaterialJudge<br/>(material_judge.py)
+    participant CA as Claude API
+    participant DN as DiscordNotifier<br/>(notifier.py)
+    participant DC as Discord (スマホ)
+    participant CS as candidates_YYYYMMDD.csv
+
+    Note over TS,DC: 毎朝 6:30 自動起動（月〜金）
+
+    TS->>MS: 起動
+
+    rect rgb(30, 60, 90)
+        Note over MS,JQ: STEP 1a｜出来高急増スクリーニング
+        MS->>SC: get_volume_surge_candidates()
+        SC->>JQ: 株価データ取得（過去30日）
+        JQ-->>SC: 全銘柄OHLCV
+        SC->>JQ: 銘柄マスタ取得（/v1/listed/info）
+        JQ-->>SC: MarketCodeName（ETF判定用）
+        SC-->>MS: 118銘柄（ETF/REIT除外・4桁・80万円以内）
+    end
+
+    rect rgb(30, 80, 60)
+        Note over MS,TD: STEP 1b｜TDnet引け後開示取得
+        MS->>TD: get_disclosures()
+        TD->>TD: 前日15:30〜当日6:00のURL生成
+        TD-->>MS: 上方修正・決算・株式分割など（下方修正は除外）
+    end
+
+    rect rgb(80, 50, 30)
+        Note over MS,YF: STEP 2｜地合いチェック
+        MS->>MK: check_sentiment()
+        MK->>YF: NYダウ・ナスダック終値取得（リトライ3回）
+        YF-->>MK: 前日比
+        MK-->>MS: normal / volume_only / skip_all
+    end
+
+    alt skip_all（両指数 -2%以上）
+        MS->>DN: send_error("地合い悪化・本日スキップ")
+        DN->>DC: 🚨通知
+    else normal or volume_only
+        rect rgb(60, 30, 80)
+            Note over MS,KB: STEP 3｜株探ニュース取得（上位10銘柄）
+            loop 上位10銘柄
+                MS->>NS: get_news(code)
+                NS->>KB: スクレイピング（0.5秒待機）
+                KB-->>NS: 直近ニュース一覧
+                NS-->>MS: ニューステキスト
+            end
+        end
+
+        rect rgb(60, 60, 20)
+            Note over MS,CA: STEP 4｜Claude API 材料判定
+            loop 上位10銘柄
+                MS->>MJ: judge(code, news_text)
+                MJ->>CA: has_material / strength / material_type / summary / risk
+                CA-->>MJ: 判定結果
+                MJ-->>MS: 採用 or 除外
+            end
+        end
+
+        Note over MS,CS: STEP 5｜CSV出力
+        MS->>CS: candidates_YYYYMMDD.csv 保存
+
+        Note over MS,DC: STEP 6｜Discord通知
+        MS->>DN: send_morning_report(candidates_df)
+        DN->>DC: 📊朝スクリーニング結果（上位5銘柄・材料付き）
+    end
+
+    Note over DC: スマホに通知着信 🔔
+```
+
+### シーケンス図の説明
+
+1. **STEP 1a**: J-Quants APIから過去30日分の株価データを取得し、出来高急増銘柄をスクリーニング
+2. **STEP 1b**: TDnetから前日引け後〜当日早朝の適時開示を取得
+3. **STEP 2**: Yahoo Finance APIでNYダウ・ナスダック終値を取得し、地合いを判定
+4. **STEP 3**: 株探から上位10銘柄のニュースをスクレイピング
+5. **STEP 4**: Claude APIで各銘柄の材料を判定（has_material, strength, material_type）
+6. **STEP 5**: 最終候補リストをCSV出力
+7. **STEP 6**: Discord Webhookで朝スクリーニング結果を通知
+
+---
+
 ## 実装済みファイル一覧
 
 ### コアロジック
