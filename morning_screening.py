@@ -1,7 +1,7 @@
 """
 朝6:30実行スクリーニング（出来高急増 + 地合いチェック + Claude材料判定）
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from dateutil import tz
 from loguru import logger
 from src.screening import Screener
@@ -20,9 +20,13 @@ def main():
 
     # 日本時間
     jst = tz.gettz("Asia/Tokyo")
-    today = datetime.now(jst)
+    now = datetime.now(jst)
 
-    logger.info(f"実行日時: {today.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"実行日時: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # スクリーニング対象日: 前営業日（前日の引け後データを使用）
+    target_date = now - timedelta(days=1)
+    logger.info(f"スクリーニング対象日: {target_date.strftime('%Y-%m-%d')} (前営業日)")
 
     # STEP 1a: 出来高急増銘柄を抽出
     logger.info("\n" + "=" * 60)
@@ -33,7 +37,7 @@ def main():
     volume_candidates = screener.get_volume_surge_candidates(
         surge_threshold=2.0,  # 20日平均の2倍以上
         lookback_days=20,
-        date=today
+        date=target_date  # 前営業日のデータを使用
     )
 
     if len(volume_candidates) == 0:
@@ -51,7 +55,7 @@ def main():
     logger.info("=" * 60)
 
     tdnet = TDnetScraper()
-    tdnet_codes = tdnet.get_disclosure_codes(today)
+    tdnet_codes = tdnet.get_disclosure_codes(target_date)
 
     if len(tdnet_codes) > 0:
         logger.success(f"引け後開示銘柄: {len(tdnet_codes)}銘柄")
@@ -159,8 +163,8 @@ def main():
     logger.info("STEP 5: 最終候補リスト出力")
     logger.info("=" * 60)
 
-    # CSV保存
-    output_path = f"data/candidates_{today.strftime('%Y%m%d')}.csv"
+    # CSV保存（当日の日付で保存）
+    output_path = f"data/candidates_{now.strftime('%Y%m%d')}.csv"
     screener.save_candidates(candidates, filepath=output_path)
 
     logger.success(f"\n最終候補: {len(candidates)}銘柄")
