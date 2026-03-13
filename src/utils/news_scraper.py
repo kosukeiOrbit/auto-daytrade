@@ -39,37 +39,47 @@ class NewsScraper:
 
             soup = BeautifulSoup(response.content, 'html.parser')
 
-            # ニュース記事を抽出
-            news_list = soup.find('div', class_='news_list')
-            if not news_list:
-                logger.warning(f"{code}: ニュースが見つかりませんでした")
+            # ニュース記事を抽出（テーブル形式）
+            # 株探は2024年以降、テーブル形式でニュースを表示
+            tables = soup.find_all('table')
+
+            # ニューステーブルを探す（通常4番目のテーブル）
+            news_table = None
+            for table in tables:
+                rows = table.find_all('tr')
+                # 10行以上あるテーブルをニューステーブルと判定
+                if len(rows) >= 5:
+                    news_table = table
+                    break
+
+            if not news_table:
+                logger.warning(f"{code}: ニューステーブルが見つかりませんでした")
                 return ""
 
-            articles = news_list.find_all('li')[:max_articles]
+            rows = news_table.find_all('tr')[:max_articles + 1]  # ヘッダー行+記事行
 
             news_texts = []
-            for article in articles:
-                # 日付
-                date_elem = article.find('span', class_='date')
-                date_text = date_elem.get_text(strip=True) if date_elem else ""
+            for row in rows[1:]:  # ヘッダー行をスキップ
+                cells = row.find_all('td')
+                if len(cells) >= 2:
+                    # 1列目: 日付、2列目以降: カテゴリ・タイトル
+                    date_text = cells[0].get_text(strip=True)
 
-                # タイトル
-                title_elem = article.find('a')
-                title_text = title_elem.get_text(strip=True) if title_elem else ""
+                    # タイトルを含むセルを探す（aタグを含むセル）
+                    title_text = ""
+                    for cell in cells[1:]:
+                        link = cell.find('a')
+                        if link:
+                            title_text = link.get_text(strip=True)
+                            break
 
-                # 本文（プレビュー）
-                content_elem = article.find('p', class_='news_content')
-                content_text = content_elem.get_text(strip=True) if content_elem else ""
-
-                if title_text:
-                    news_texts.append(f"[{date_text}] {title_text}")
-                    if content_text:
-                        news_texts.append(content_text)
+                    if date_text and title_text:
+                        news_texts.append(f"[{date_text}] {title_text}")
 
             combined_text = "\n".join(news_texts)
 
             if combined_text:
-                logger.success(f"{code}: ニュース{len(articles)}件取得")
+                logger.success(f"{code}: ニュース{len(news_texts)}件取得")
             else:
                 logger.warning(f"{code}: ニューステキストなし")
 
