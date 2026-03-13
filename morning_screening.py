@@ -7,6 +7,8 @@ from loguru import logger
 from src.screening import Screener
 from src.utils.market_sentiment import MarketSentiment
 from src.utils.material_judge import MaterialJudge
+from src.utils.tdnet_scraper import TDnetScraper
+from src.utils.news_scraper import NewsScraper
 
 
 def main():
@@ -42,14 +44,28 @@ def main():
 
     logger.success(f"出来高急増銘柄: {len(volume_candidates)}銘柄")
 
-    # STEP 1b: TDnet引け後適時開示取得（TODO: 口座開設後に実装）
+    # STEP 1b: TDnet引け後適時開示取得
     logger.info("\n" + "=" * 60)
-    logger.info("STEP 1b: TDnet引け後適時開示取得（未実装）")
+    logger.info("STEP 1b: TDnet引け後適時開示取得")
     logger.info("=" * 60)
-    logger.warning("TDnet MCP連携は口座開設後に実装予定です")
 
-    # STEP 1c: 候補プール（現時点では出来高急増銘柄のみ）
+    tdnet = TDnetScraper()
+    tdnet_codes = tdnet.get_disclosure_codes(today)
+
+    if len(tdnet_codes) > 0:
+        logger.success(f"引け後開示銘柄: {len(tdnet_codes)}銘柄")
+        logger.info(f"  コード: {', '.join(tdnet_codes[:10])}{'...' if len(tdnet_codes) > 10 else ''}")
+    else:
+        logger.info("引け後開示銘柄なし")
+
+    # STEP 1c: 候補プール（出来高急増 + TDnet開示銘柄）
+    # 出来高急増銘柄リストに、TDnet銘柄を追加
     candidates = volume_candidates.copy()
+
+    # TDnet銘柄で出来高急増リストに含まれていないものを追加
+    # ※ただし、TDnet銘柄の詳細データ（OHLCV等）は別途取得が必要
+    # 今回は出来高急増銘柄のみでフィルタ済みのため、TDnetコードは参考情報として保持
+    tdnet_codes_set = set(tdnet_codes)
 
     # STEP 2: 地合いチェック
     logger.info("\n" + "=" * 60)
@@ -80,35 +96,59 @@ def main():
         logger.warning("地合いやや悪化: 出来高急増銘柄のみ対象（TDnet銘柄は除外）")
         # 現時点ではTDnet銘柄がないため、そのまま継続
 
-    # STEP 3: ニュース取得（TODO: 株探スクレイピング）
+    # STEP 3: ニュース取得（株探スクレイピング）
     logger.info("\n" + "=" * 60)
-    logger.info("STEP 3: ニュース・開示内容取得（未実装）")
+    logger.info("STEP 3: ニュース・開示内容取得")
     logger.info("=" * 60)
-    logger.warning("株探スクレイピングは今後実装予定です")
 
-    # STEP 4: Claude API材料判定（ニュースがないためスキップ）
+    news_scraper = NewsScraper()
+
+    # 各銘柄のニュースと会社名を取得（上位10銘柄のみ、API制限対策）
+    news_data = {}
+    for idx, row in candidates.head(10).iterrows():
+        code = str(row['Code'])
+
+        # 会社名取得
+        company_name = news_scraper.get_company_name(code)
+
+        # ニュース取得
+        news_text = news_scraper.get_stock_news(code, max_articles=3)
+
+        news_data[code] = {
+            'company_name': company_name,
+            'news_text': news_text,
+            'volume_surge_ratio': row['VolumeSurgeRatio']
+        }
+
+    logger.success(f"ニュース取得完了: {len(news_data)}銘柄")
+
+    # STEP 4: Claude API材料判定
     logger.info("\n" + "=" * 60)
     logger.info("STEP 4: Claude API材料判定")
     logger.info("=" * 60)
 
     judge = MaterialJudge()
+    judgments = {}
 
-    # デモ: 最初の3銘柄だけ判定（ニュースがないため簡易判定）
-    for idx, row in candidates.head(3).iterrows():
-        code = row['Code']
-        # 銘柄名は取得できないため、コードのみ
-        name = f"銘柄{code}"
+    for code, data in news_data.items():
+        company_name = data['company_name']
 
-        # ニュースがないため、簡易テキストを生成
-        news_text = f"出来高急増: {row['VolumeSurgeRatio']:.2f}倍"
+        # ニューステキスト + 出来高急増情報を結合
+        combined_text = f"出来高急増: {data['volume_surge_ratio']:.2f}倍\n\n{data['news_text']}"
 
-        judgment = judge.judge_material(code, name, news_text)
+        # Claude APIで判定
+        judgment = judge.judge_material(code, company_name, combined_text)
+        judgments[code] = judgment
 
-        # 除外判定
+        # 結果表示
         if judge.should_exclude(judgment):
-            logger.info(f"  → 除外: {code} {name}")
+            logger.info(f"  → 除外: {code} {company_name}")
         else:
-            logger.info(f"  → 採用: {code} {name}")
+            logger.info(
+                f"  → 採用: {code} {company_name} "
+                f"[{judgment['material_type']}・{judgment['strength']}] "
+                f"{judgment['summary']}"
+            )
 
     # STEP 5: 最終候補リスト出力
     logger.info("\n" + "=" * 60)

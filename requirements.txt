@@ -22,3 +22,6 @@ anthropic>=0.40.0
 
 # Visualization
 matplotlib>=3.7.0
+
+# Web scraping
+beautifulsoup4>=4.12.0
