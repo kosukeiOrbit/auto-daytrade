@@ -191,8 +191,15 @@ class Screener:
         df_target = df_target[df_target['AvgVolume'].notna()]
         logger.info(f"平均出来高計算可能: {len(df_target)}件")
 
-        # 3. 出来高急増フィルタ
-        logger.info(f"\n[3/5] 出来高急増フィルタ（{surge_threshold}倍以上）...")
+        # 3. 4桁コードフィルタ（ETF等の5桁コードを除外）
+        logger.info(f"\n[3/6] 4桁コードフィルタ（通常株式のみ）...")
+        df_target = df_target[
+            (df_target['Code'] >= 1000) & (df_target['Code'] <= 9999)
+        ].copy()
+        logger.info(f"4桁コード銘柄: {len(df_target)}件")
+
+        # 4. 出来高急増フィルタ
+        logger.info(f"\n[4/6] 出来高急増フィルタ（{surge_threshold}倍以上）...")
         df_target['VolumeSurgeRatio'] = df_target['Vo'] / df_target['AvgVolume']
         df_filtered = df_target[df_target['VolumeSurgeRatio'] >= surge_threshold].copy()
         logger.info(f"出来高急増銘柄: {len(df_filtered)}件")
@@ -201,8 +208,8 @@ class Screener:
             logger.warning("条件に合う銘柄が見つかりませんでした")
             return pd.DataFrame()
 
-        # 4. 25日移動平均以上の銘柄（上昇トレンド）
-        logger.info(f"\n[4/5] 上昇トレンドフィルタ（25日移動平均以上）...")
+        # 5. 25日移動平均線フィルタ（緩和版: MA25の90%以上）
+        logger.info(f"\n[5/6] 上昇トレンドフィルタ（25日移動平均の90%以上）...")
 
         # 25日移動平均を計算
         df_prices['MA25'] = df_prices.groupby('Code')['C'].transform(
@@ -213,21 +220,21 @@ class Screener:
         df_ma = df_prices[df_prices['Date'] == target_date_str][['Code', 'MA25']].copy()
         df_filtered = df_filtered.merge(df_ma, on='Code', how='left')
 
-        # 株価がMA25以上
+        # 株価がMA25の90%以上（緩和版）
         df_filtered = df_filtered[
             (df_filtered['MA25'].notna()) &
-            (df_filtered['C'] >= df_filtered['MA25'])
+            (df_filtered['C'] >= df_filtered['MA25'] * 0.90)
         ].copy()
         logger.info(f"上昇トレンド銘柄: {len(df_filtered)}件")
 
-        # 5. 予算内フィルタ
+        # 6. 予算内フィルタ
         if self.budget:
-            logger.info(f"\n[5/5] 予算内フィルタ (1単元100株 ≤ {self.budget:,}円)...")
+            logger.info(f"\n[6/6] 予算内フィルタ (1単元100株 ≤ {self.budget:,}円)...")
             df_filtered['UnitPrice'] = df_filtered['C'] * 100
             df_filtered = df_filtered[df_filtered['UnitPrice'] <= self.budget].copy()
             logger.info(f"予算内銘柄: {len(df_filtered)}件")
         else:
-            logger.info(f"\n[5/5] 予算フィルタはスキップ")
+            logger.info(f"\n[6/6] 予算フィルタはスキップ")
 
         # 結果を整形（出来高急増率で降順ソート）
         result = df_filtered[[
