@@ -20,6 +20,15 @@ class Screener:
         """
         self.client = JQuantsClient()
         self.budget = budget
+
+        # 上場銘柄情報を取得（ETF・REIT除外用）
+        try:
+            self.listed_info = self.client.get_listed_info()
+            logger.info(f"上場銘柄情報を取得しました: {len(self.listed_info)}銘柄")
+        except Exception as e:
+            logger.warning(f"上場銘柄情報の取得に失敗しました: {e}")
+            self.listed_info = None
+
         logger.info(f"スクリーナーを初期化しました (予算: {budget:,}円)" if budget else "スクリーナーを初期化しました (予算: 制限なし)")
 
     def get_candidates(
@@ -226,6 +235,46 @@ class Screener:
         if len(df_filtered) == 0:
             logger.warning("4桁コード銘柄が見つかりませんでした")
             return pd.DataFrame()
+
+        # 4.5. MktNmでETF・ETN・REIT除外（「その他」市場を除外）
+        if self.listed_info is not None:
+            logger.info(f"\n[4.5/5] ETF・ETN・REIT除外フィルタ...")
+
+            # 上場銘柄情報とマージ（Code4を使用）
+            # listed_infoのCodeは5桁（末尾0付き）なので、10で割って4桁に変換
+            listed_info_4digit = self.listed_info.copy()
+            listed_info_4digit['Code4'] = (pd.to_numeric(listed_info_4digit['Code'], errors='coerce') // 10).astype('Int64')
+
+            # Code4でマージ（MktNmを取得）
+            df_filtered = df_filtered.merge(
+                listed_info_4digit[['Code4', 'MktNm']],
+                on='Code4',
+                how='left'
+            )
+
+            # MktNmが取得できた銘柄数を確認
+            has_market_info = df_filtered['MktNm'].notna().sum()
+            logger.info(f"  市場情報取得: {has_market_info}/{len(df_filtered)}件")
+
+            # 除外前の件数を記録
+            before_count = len(df_filtered)
+
+            # 「その他」市場を除外（ETF・ETN・REIT等503銘柄）
+            df_filtered = df_filtered[
+                df_filtered['MktNm'] != 'その他'
+            ].copy()
+
+            excluded_count = before_count - len(df_filtered)
+            logger.info(f"  ETF・ETN・REIT除外: {excluded_count}件除外, {len(df_filtered)}件残存")
+
+            # MktNmカラムを削除（不要なため）
+            df_filtered = df_filtered.drop(columns=['MktNm'], errors='ignore')
+
+            if len(df_filtered) == 0:
+                logger.warning("ETF・ETN・REIT除外後、候補銘柄がなくなりました")
+                return pd.DataFrame()
+        else:
+            logger.warning(f"\n[4.5/5] 上場銘柄情報が取得できていないため、ETF・ETN・REIT除外をスキップ")
 
         # MA25は参考値として計算するが、フィルタには使用しない
         logger.info(f"\n25日移動平均を計算中（参考値）...")
