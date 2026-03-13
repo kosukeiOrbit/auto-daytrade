@@ -130,6 +130,119 @@ class Screener:
 
         return result
 
+    def get_volume_surge_candidates(
+        self,
+        surge_threshold=2.0,
+        lookback_days=20,
+        date=None
+    ):
+        """
+        出来高急増銘柄をスクリーニング（新設計）
+
+        Args:
+            surge_threshold: 出来高急増倍率（デフォルト2.0 = 20日平均の2倍以上）
+            lookback_days: 平均出来高計算期間（デフォルト20日）
+            date: 対象日（datetimeオブジェクト）。Noneの場合は最新
+
+        Returns:
+            DataFrame: 候補銘柄リスト
+        """
+        logger.info("=" * 60)
+        logger.info("出来高急増スクリーニング開始")
+        logger.info(f"条件: {lookback_days}日平均の{surge_threshold}倍以上")
+        if self.budget:
+            logger.info(f"予算: {self.budget:,}円")
+        logger.info("=" * 60)
+
+        # 対象日が指定されていない場合は今日を使用
+        if date is None:
+            jst = tz.gettz("Asia/Tokyo")
+            date = datetime.now(jst)
+
+        # 過去データ取得（平均計算用に余裕を持って取得）
+        start_date = date - timedelta(days=lookback_days + 10)
+
+        logger.info(f"\n[1/5] 株価データ取得中（{start_date.strftime('%Y-%m-%d')} 〜 {date.strftime('%Y-%m-%d')}）...")
+        df_prices = self.client.client.get_eq_bars_daily_range(
+            start_dt=start_date,
+            end_dt=date
+        )
+        logger.info(f"取得件数: {len(df_prices)}件")
+
+        # 日付を変換
+        df_prices['Date'] = pd.to_datetime(df_prices['Date'])
+        target_date_str = date.strftime('%Y-%m-%d')
+        logger.info(f"対象日: {target_date_str}")
+
+        # 2. 各銘柄の20日平均出来高を計算
+        logger.info(f"\n[2/5] {lookback_days}日平均出来高を計算中...")
+        df_prices = df_prices.sort_values(['Code', 'Date'])
+
+        # 20日平均出来高を計算（rolling）
+        df_prices['AvgVolume'] = df_prices.groupby('Code')['Vo'].transform(
+            lambda x: x.rolling(window=lookback_days, min_periods=lookback_days).mean()
+        )
+
+        # 対象日のデータのみ抽出
+        df_target = df_prices[df_prices['Date'] == target_date_str].copy()
+        logger.info(f"対象日のデータ: {len(df_target)}件")
+
+        # 平均出来高が計算できている銘柄のみ
+        df_target = df_target[df_target['AvgVolume'].notna()]
+        logger.info(f"平均出来高計算可能: {len(df_target)}件")
+
+        # 3. 出来高急増フィルタ
+        logger.info(f"\n[3/5] 出来高急増フィルタ（{surge_threshold}倍以上）...")
+        df_target['VolumeSurgeRatio'] = df_target['Vo'] / df_target['AvgVolume']
+        df_filtered = df_target[df_target['VolumeSurgeRatio'] >= surge_threshold].copy()
+        logger.info(f"出来高急増銘柄: {len(df_filtered)}件")
+
+        if len(df_filtered) == 0:
+            logger.warning("条件に合う銘柄が見つかりませんでした")
+            return pd.DataFrame()
+
+        # 4. 25日移動平均以上の銘柄（上昇トレンド）
+        logger.info(f"\n[4/5] 上昇トレンドフィルタ（25日移動平均以上）...")
+
+        # 25日移動平均を計算
+        df_prices['MA25'] = df_prices.groupby('Code')['C'].transform(
+            lambda x: x.rolling(window=25, min_periods=25).mean()
+        )
+
+        # 対象日のMA25をマージ
+        df_ma = df_prices[df_prices['Date'] == target_date_str][['Code', 'MA25']].copy()
+        df_filtered = df_filtered.merge(df_ma, on='Code', how='left')
+
+        # 株価がMA25以上
+        df_filtered = df_filtered[
+            (df_filtered['MA25'].notna()) &
+            (df_filtered['C'] >= df_filtered['MA25'])
+        ].copy()
+        logger.info(f"上昇トレンド銘柄: {len(df_filtered)}件")
+
+        # 5. 予算内フィルタ
+        if self.budget:
+            logger.info(f"\n[5/5] 予算内フィルタ (1単元100株 ≤ {self.budget:,}円)...")
+            df_filtered['UnitPrice'] = df_filtered['C'] * 100
+            df_filtered = df_filtered[df_filtered['UnitPrice'] <= self.budget].copy()
+            logger.info(f"予算内銘柄: {len(df_filtered)}件")
+        else:
+            logger.info(f"\n[5/5] 予算フィルタはスキップ")
+
+        # 結果を整形（出来高急増率で降順ソート）
+        result = df_filtered[[
+            'Code', 'Date', 'O', 'H', 'L', 'C', 'Vo',
+            'AvgVolume', 'VolumeSurgeRatio', 'MA25'
+        ]].copy()
+        result = result.sort_values('VolumeSurgeRatio', ascending=False)
+        result = result.reset_index(drop=True)
+
+        logger.info("\n" + "=" * 60)
+        logger.success(f"出来高急増スクリーニング完了: {len(result)}銘柄")
+        logger.info("=" * 60)
+
+        return result
+
     def save_candidates(self, df, filepath="data/candidates.csv"):
         """
         候補銘柄をCSVファイルに保存
