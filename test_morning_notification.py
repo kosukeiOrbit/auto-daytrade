@@ -1,5 +1,5 @@
 """
-朝6:30実行スクリーニング（出来高急増 + 地合いチェック + Claude材料判定）
+morning_screening.py のテスト実行（3/13データで通知テスト）
 """
 from datetime import datetime
 from dateutil import tz
@@ -15,12 +15,12 @@ from src.utils.notifier import DiscordNotifier
 def main():
     """メイン処理"""
     logger.info("=" * 60)
-    logger.info("朝スクリーニング開始（morning_screening.py）")
+    logger.info("朝スクリーニングテスト（3/13データ + Discord通知）")
     logger.info("=" * 60)
 
-    # 日本時間
+    # テスト用の日付（3/13）
     jst = tz.gettz("Asia/Tokyo")
-    today = datetime.now(jst)
+    today = datetime(2026, 3, 13, 23, 0, 0, tzinfo=jst)
 
     logger.info(f"実行日時: {today.strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -29,9 +29,9 @@ def main():
     logger.info("STEP 1a: 出来高急増銘柄を抽出")
     logger.info("=" * 60)
 
-    screener = Screener(budget=800_000)  # 予算80万円
+    screener = Screener(budget=800_000)
     volume_candidates = screener.get_volume_surge_candidates(
-        surge_threshold=2.0,  # 20日平均の2倍以上
+        surge_threshold=2.0,
         lookback_days=20,
         date=today
     )
@@ -59,13 +59,8 @@ def main():
     else:
         logger.info("引け後開示銘柄なし")
 
-    # STEP 1c: 候補プール（出来高急増 + TDnet開示銘柄）
-    # 出来高急増銘柄リストに、TDnet銘柄を追加
+    # STEP 1c: 候補プール
     candidates = volume_candidates.copy()
-
-    # TDnet銘柄で出来高急増リストに含まれていないものを追加
-    # ※ただし、TDnet銘柄の詳細データ（OHLCV等）は別途取得が必要
-    # 今回は出来高急増銘柄のみでフィルタ済みのため、TDnetコードは参考情報として保持
     tdnet_codes_set = set(tdnet_codes)
 
     # STEP 2: 地合いチェック
@@ -74,7 +69,7 @@ def main():
     logger.info("=" * 60)
 
     sentiment = MarketSentiment()
-    us_market = sentiment.get_us_market_close()
+    us_market = sentiment.get_us_market_close(today)
 
     if us_market is None:
         logger.warning("米国市場データ取得失敗 → 地合いチェックスキップ")
@@ -86,25 +81,22 @@ def main():
             threshold=-2.0
         )
 
-    # 地合いによる候補絞り込み
     if market_status == 'skip_all':
-        logger.error("地合い悪化のため全スキップします")
+        logger.warning("地合い悪化のため全スキップ")
         logger.info("=" * 60)
         logger.info("朝スクリーニング終了（地合い悪化）")
         logger.info("=" * 60)
         return
     elif market_status == 'volume_only':
         logger.warning("地合いやや悪化: 出来高急増銘柄のみ対象（TDnet銘柄は除外）")
-        # 現時点ではTDnet銘柄がないため、そのまま継続
 
-    # STEP 3: ニュース取得（株探スクレイピング）
+    # STEP 3: ニュース取得（上位10銘柄のみ）
     logger.info("\n" + "=" * 60)
     logger.info("STEP 3: ニュース・開示内容取得")
     logger.info("=" * 60)
 
     news_scraper = NewsScraper()
 
-    # 各銘柄のニュースと会社名を取得（上位10銘柄のみ、API制限対策）
     news_data = {}
     for idx, row in candidates.head(10).iterrows():
         code = str(row['Code'])
@@ -160,7 +152,7 @@ def main():
     logger.info("=" * 60)
 
     # CSV保存
-    output_path = f"data/candidates_{today.strftime('%Y%m%d')}.csv"
+    output_path = f"data/candidates_test_{today.strftime('%Y%m%d')}.csv"
     screener.save_candidates(candidates, filepath=output_path)
 
     logger.success(f"\n最終候補: {len(candidates)}銘柄")
