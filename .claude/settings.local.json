@@ -23,7 +23,9 @@
       "Bash(echo:*)",
       "Bash(.env.example)",
       "Bash(git fetch:*)",
-      "Bash(git pull:*)"
+      "Bash(git pull:*)",
+      "Bash(python test_full_screening.py:*)",
+      "Bash(.venvScriptsactivate)"
     ]
   }
 }
