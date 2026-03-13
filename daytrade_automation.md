@@ -13,7 +13,11 @@
 | 実行環境 | Python 3.10以上 | 無料 | Claude Codeが自動セットアップ |
 | 発注API | kabuステーションAPI（三菱UFJ eスマート証券） | 無料 | 口座開設申請済み・審査中 |
 | 株価データ | J-Quants API | 月1,650円（ライトプラン） | スクリーニング・バックテスト用 |
-| 適時開示 | TDnet MCP | 無料 | 自社株買い・業績修正情報 |
+| 適時開示 | TDnet（株探スクレイピング） | 無料 | 引け後適時開示情報 |
+| ニュース取得 | 株探スクレイピング | 無料 | 銘柄別ニュース・会社名 |
+| 地合いチェック | Yahoo Finance API | 無料 | NYダウ・ナスダック終値 |
+| 材料判定 | Claude API (Sonnet 4.5) | 従量課金（1日約6円） | ニュース内容のAI判定 |
+| 通知 | Discord Webhook | 無料 | スクリーニング結果・エントリー/決済通知 |
 | チャート分析 | J-Quants API + Python（数値計算） | 無料〜 | VWAP・MA・上昇率をAPI取得＆計算で判定 |
 
 ### 証券口座について
@@ -46,44 +50,54 @@
 ```
 STEP 1a: J-Quants APIで出来高急増銘柄を抽出
   → 直近20日平均出来高の2倍以上
-  → 株価が25日移動平均以上（上昇トレンド）
+  → 4桁コード（1000-9999）のみ対象
+  → ETF・ETN・REIT除外（市場区分で判定）
   → 1単元（100株×株価）≤ 買付余力（80万円）
-  → ETF・ETN・REIT除外
+  → 実装ファイル: src/screening/screener.py
 
-STEP 1b: TDnet MCPで引け後の適時開示を取得
-  → 前日15:30以降の開示を全件取得
+STEP 1b: TDnet引け後適時開示を取得
+  → 前日15:30〜当日6:00の開示を全件取得
   → 対象：業績修正（上方）・決算・株式分割・自社株買い
   → 開示があった銘柄コードを抽出
+  → 実装ファイル: src/utils/tdnet_scraper.py
 
 STEP 1c: 両ソースを合算・重複除去
-  → 候補プール（〜20銘柄程度）
+  → 候補プール（〜118銘柄程度）
 
 STEP 2: 地合いチェック（スキップ判定）
-  → NYダウ・ナスダック終値を取得
-  → 日経先物（SGX）の気配を取得
+  → NYダウ・ナスダック終値をYahoo Finance APIで取得（リトライ3回）
   → 判定：
-      NYダウ -2%以上 かつ ナスダック -2%以上 → 全スキップ（強いリスクオフ）
-      どちらか一方が -2%以上               → 候補を出来高急増のみに絞る
-      両方 -2%未満                         → 通常通り全候補を対象
+      NYダウ -2%以上 かつ ナスダック -2%以上 → skip_all（全スキップ）
+      どちらか一方が -2%以上               → volume_only（出来高急増のみ対象）
+      両方 -2%未満                         → normal（通常通り全候補を対象）
+      データ取得失敗                       → normal（フォールバック）
+  → 実装ファイル: src/utils/market_sentiment.py
 
-STEP 3: 各銘柄のニュース・開示内容を取得
-  → 株探の銘柄ニュースページをスクレイピング
-  → TDnetの開示本文を取得
+STEP 3: 各銘柄のニュース取得
+  → 株探の銘柄ニュースページをスクレイピング（最新3件）
+  → テーブル形式のニュースを抽出（[日付] タイトル）
+  → 会社名も取得
+  → 実装ファイル: src/utils/news_scraper.py
 
 STEP 4: Claude APIで材料判定
-  → 各銘柄のニュース・開示本文をClaude Sonnetに渡す
+  → 上位10銘柄について、ニュース+出来高急増情報をClaude Sonnet 4.5に渡す
   → 以下をJSON形式で取得：
       has_material: true/false
-      material_type: 決算/業績上方修正/株式分割/自社株買い/テーマ株/その他
+      material_type: 決算好調/業績上方修正/株式分割/自社株買い/テーマ株/その他
       strength: 強/中/弱
       summary: 材料の内容（一行）
-      risk: 注意事項（翌日決算・信用倍率高い等）
-  → strength=弱 かつ has_material=false → 候補から除外
+  → has_material=false → 候補から除外
+  → 実装ファイル: src/utils/material_judge.py
 
 STEP 5: 最終候補リスト出力
   → candidates_YYYYMMDD.csv として保存
-  → 内容：コード・銘柄名・終値・1単元コスト・材料サマリー・強度・出来高急増率
-  → 翌朝9:00のエントリー判断に使用
+  → 内容：コード・銘柄名・終値・出来高急増率・25日移動平均等
+  → 実装ファイル: src/screening/screener.py
+
+STEP 6: Discord通知送信
+  → 朝スクリーニング結果をDiscord Webhookで送信
+  → 内容：候補銘柄数、地合い情報、上位5銘柄の詳細（コード・企業名・材料サマリー）
+  → 実装ファイル: src/utils/notifier.py
 ```
 
 ### 当日リアルタイム処理（kabuステーション連携後）
@@ -116,16 +130,19 @@ STEP 8: ポジション監視（5分ごと）
 - [ ] kabuステーションのインストール・API有効化（口座開設完了後）
 - [ ] TDnet MCPの設定
 
-### フェーズ2：スクリーニング自動化（完了 ✅ → 改訂中 🔄）
+### フェーズ2：スクリーニング自動化（完了 ✅）
 - [x] J-Quants API ClientV2 統合
 - [x] 全銘柄データ取得スクリプト作成
 - [x] フィルタ条件の実装（上昇率+3%・売買代金上位20・予算80万円以内）
 - [x] 候補銘柄リストのCSV出力
 - [x] 動作確認・精度検証（2026-03-12：16銘柄、平均上昇率8.85%、最大23.54%）
-- [ ] **【改訂】出来高急増フィルタに変更**（前日比上昇率から転換）
-- [ ] **【新規】TDnet MCPで引け後適時開示取得**
-- [ ] **【新規】NYダウ・ナスダック終値で地合いチェック**
-- [ ] **【新規】Claude APIで材料判定（morning_screening.py）**
+- [x] **【改訂】出来高急増フィルタに変更**（20日平均出来高の2倍以上）
+- [x] **【改訂】4桁コードフィルタ実装**（ETF等の5桁コード除外）
+- [x] **【改訂】ETF・ETN・REIT除外フィルタ追加**（市場区分で判定）
+- [x] **【新規】TDnet引け後適時開示取得**（前日15:30〜当日6:00の開示）
+- [x] **【新規】NYダウ・ナスダック終値で地合いチェック**（Yahoo Finance API、リトライ処理付き）
+- [x] **【新規】株探ニューススクレイピング**（最新3件のニュース取得）
+- [x] **【新規】Claude APIで材料判定**（has_material, material_type, strength, summaryを自動判定）
 - [ ] **【新規】毎朝6:30 Windowsタスクスケジューラ自動実行**
 
 ### フェーズ3：数値ベースチャート判定（完了 ✅）
@@ -134,7 +151,20 @@ STEP 8: ポジション監視（5分ごと）
 - [ ] kabuステーションAPIでリアルタイムOHLCV取得（口座開設完了後）
 - [ ] 5分ごとの定期実行設定（Windowsタスクスケジューラ）
 
-### フェーズ4：判定精度の検証（完了 ✅）
+### フェーズ4：Discord通知機能（完了 ✅）
+- [x] Discord Webhook通知クラス実装（DiscordNotifier）
+- [x] 朝スクリーニング結果通知（send_morning_report）
+  - 候補銘柄数、材料判定結果、地合い情報、TDnet開示件数
+  - 上位5銘柄の詳細（コード・企業名・出来高急増率・終値・材料サマリー）
+- [x] エントリーシグナル通知（send_entry_signal）※フェーズ5で使用
+- [x] 決済通知（send_exit）※フェーズ5で使用
+- [x] エラー通知（send_error）
+- [x] .env.exampleとconfig.pyにDISCORD_WEBHOOK_URL設定を追加
+- [x] morning_screening.pyとtest_morning_notification.pyに統合
+- [x] 企業名表示機能（judgmentsに企業名を追加）
+- [x] 動作確認・通知テスト完了
+
+### フェーズ5：判定精度の検証（一部完了 ✅）
 - [x] トレードシミュレーター実装（ポジション管理・損益計算・資金管理）
 - [x] パフォーマンス指標計算（勝率・PF・R倍数・DD・連勝連敗）
 - [x] バックテストエンジン実装
@@ -148,7 +178,8 @@ STEP 8: ポジション監視（5分ごと）
 - [ ] 5分足データを使った精密なバックテスト（kabuステーション連携後）
 - [ ] パラメータチューニング機能の追加
 
-### フェーズ5：自動発注（1ヶ月以上の検証後）
+### フェーズ6：自動発注（口座開設完了後）
+- [ ] kabuステーション APIセットアップ（口座開設審査中）
 - [ ] kabuステーションAPIで買い注文の発注
 - [ ] 逆指値・利確注文のセット
 - [ ] 安全装置の実装
@@ -211,14 +242,14 @@ STEP 8: ポジション監視（5分ごと）
 ### STEP 1b：TDnet引け後適時開示フィルタ
 ```
 前日15:30〜当日6:00の開示を対象
-取得対象の開示種別：
-  ・業績予想の修正（上方修正のみ）
-  ・決算短信（経常利益が予想を上回るもの）
-  ・株式分割
-  ・自己株式取得（自社株買い）
-  ・株主優待新設・拡充
-除外：
-  ・当日・翌日が本決算の銘柄（乱高下リスク）
+取得方法：
+  ・TDnetのHTML（https://www.release.tdnet.info/inbs/I_list_YYYYMMDD_01.html）をスクレイピング
+  ・決算短信・業績修正等のポジティブ開示を抽出
+  ・開示があった銘柄コードをリスト化
+注意：
+  ・TDnetのテーブルが見つからない場合は0件として処理
+  ・現在の実装では開示種別のフィルタは未実装（全開示を取得）
+実装ファイル：src/utils/tdnet_scraper.py
 ```
 
 ### STEP 2：地合いチェック
@@ -232,27 +263,31 @@ NYダウ終値・ナスダック終値を取得して判定：
 ※ 日経先物（SGX）も参考値として取得・ログ保存
 ```
 
-### STEP 3：Claude API材料判定
+### STEP 4：Claude API材料判定（実装済み）
 ```python
-# 各銘柄に対してClaude Sonnet APIを呼び出す
-prompt = f"""
-銘柄名: {name}（{code}）
-直近ニュース・適時開示:
-{news_and_disclosure_text}
+# 各銘柄に対してClaude Sonnet 4.5 APIを呼び出す（上位10銘柄のみ）
+# 実装ファイル: src/utils/material_judge.py
 
-以下をJSON形式のみで回答してください（説明不要）:
-{{
-  "has_material": true/false,
-  "material_type": "業績上方修正|決算好調|株式分割|自社株買い|テーマ株|その他",
-  "strength": "強|中|弱",
-  "summary": "材料の内容を20字以内で",
-  "risk": "注意点があれば（翌日決算・高信用倍率等）、なければnull"
-}}
-"""
-# strength=弱 かつ has_material=false の銘柄は候補から除外
+入力：
+  - 銘柄コード
+  - 企業名
+  - ニューステキスト（株探から取得した最新3件）
+  - 出来高急増情報
+
+出力（JSON形式）：
+  {
+    "has_material": true/false,
+    "material_type": "決算好調|業績上方修正|株式分割|自社株買い|テーマ株|その他",
+    "strength": "強|中|弱",
+    "summary": "材料の内容（簡潔に）"
+  }
+
+除外ロジック：
+  - has_material=false の銘柄は候補から除外
+  - should_exclude() メソッドで判定
 ```
 
-**コスト試算**：Claude Sonnet 1回≒$0.003 × 20銘柄 = **1日約6円以下**
+**コスト試算**：Claude Sonnet 1回≒$0.003 × 10銘柄 = **1日約3〜6円以下**
 
 ---
 
@@ -427,5 +462,40 @@ def check_entry(symbol: str, ohlcv: list, current_price: float, prev_close: floa
 
 ---
 
+## 実装済みファイル一覧
+
+### コアロジック
+- `src/screening/screener.py` - スクリーニングエンジン（出来高急増・フィルタ処理）
+- `src/utils/jquants_client.py` - J-Quants API クライアント
+- `src/utils/tdnet_scraper.py` - TDnet 引け後開示スクレイピング
+- `src/utils/news_scraper.py` - 株探ニューススクレイピング
+- `src/utils/market_sentiment.py` - 地合いチェック（NYダウ・ナスダック）
+- `src/utils/material_judge.py` - Claude API材料判定
+- `src/utils/notifier.py` - Discord Webhook通知
+- `src/utils/config.py` - 環境変数・設定管理
+
+### バックテスト（フェーズ5）
+- `src/backtest/simulator.py` - トレードシミュレーター
+- `src/backtest/engine.py` - バックテストエンジン
+- `src/entry/judge.py` - エントリー判定ロジック
+
+### メインスクリプト
+- `morning_screening.py` - 朝スクリーニング本番スクリプト
+- `test_morning_notification.py` - 朝スクリーニングテスト（3/13データ固定）
+
+### テストスクリプト
+- `test_simple_screening.py` - シンプルスクリーニングテスト
+- `test_full_screening.py` - フルスクリーニングテスト
+- `test_backtest.py` - バックテストテスト
+- `test_integrated_backtest.py` - 統合バックテストテスト
+
+### 設定ファイル
+- `.env` - 環境変数（J-Quants API Key, Discord Webhook URL等）
+- `.env.example` - 環境変数のサンプル
+- `daytrade_automation.md` - 本設計書
+
+---
+
 *作成日：2026年3月11日*
+*最終更新：2026年3月14日*
 *免責：本設計書は技術的な環境構築の参考資料です。株式投資には元本割れのリスクがあります。投資判断は自己責任で行ってください。*
