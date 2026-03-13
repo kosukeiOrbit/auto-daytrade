@@ -7,6 +7,7 @@ from dateutil import tz
 from bs4 import BeautifulSoup
 from loguru import logger
 import time
+import jpholiday
 
 
 class TDnetScraper:
@@ -85,12 +86,48 @@ class TDnetScraper:
             logger.error(f"TDnetデータ取得エラー ({date_str}): {e}")
             return []
 
+    def _is_business_day(self, date):
+        """
+        営業日判定（土日祝日を除外）
+
+        Args:
+            date: 対象日 (datetime)
+
+        Returns:
+            bool: 営業日の場合True
+        """
+        # 土日判定
+        if date.weekday() >= 5:
+            return False
+
+        # 祝日判定
+        if jpholiday.is_holiday(date):
+            return False
+
+        return True
+
+    def _get_previous_business_day(self, date):
+        """
+        直前の営業日を取得
+
+        Args:
+            date: 基準日 (datetime)
+
+        Returns:
+            datetime: 直前の営業日
+        """
+        prev_date = date - timedelta(days=1)
+        while not self._is_business_day(prev_date):
+            prev_date -= timedelta(days=1)
+        return prev_date
+
     def get_after_hours_disclosures(self, target_date=None):
         """
-        引け後の適時開示を取得（前日15:30〜当日6:00）
+        引け後の適時開示を取得（直前の営業日15:30〜当日6:00）
 
-        前日ページと当日ページの両方を取得してマージし、
-        15:30〜翌6:00の範囲でフィルタする。
+        月曜日の場合は金曜15:30〜月曜6:00（土日含む3日分）
+        火〜金の場合は前日15:30〜当日6:00（1日分）
+        祝日翌日の場合は営業日を遡る
 
         Args:
             target_date: 対象日 (datetime)。Noneの場合は今日
@@ -102,26 +139,27 @@ class TDnetScraper:
         if target_date is None:
             target_date = datetime.now(jst)
 
-        # 前日を計算（土日をスキップして金曜日へ）
-        prev_date = target_date - timedelta(days=1)
-        while prev_date.weekday() >= 5:
-            prev_date -= timedelta(days=1)
+        # 直前の営業日を取得（土日祝日をスキップ）
+        prev_business_day = self._get_previous_business_day(target_date)
 
         # フィルタ範囲
-        after_hours_start = prev_date.replace(hour=15, minute=30, second=0, tzinfo=jst)
+        after_hours_start = prev_business_day.replace(hour=15, minute=30, second=0, tzinfo=jst)
         next_morning = target_date.replace(hour=6, minute=0, second=0, tzinfo=jst)
 
         logger.info(
             f"TDnet引け後開示取得: "
-            f"{prev_date.strftime('%Y-%m-%d')} 15:30 〜 "
+            f"{prev_business_day.strftime('%Y-%m-%d')} 15:30 〜 "
             f"{target_date.strftime('%Y-%m-%d')} 06:00"
         )
 
-        # 前日ページと当日ページ両方を取得してマージ
+        # 直前の営業日から当日まで、全ての日付のページを取得
         all_disclosures = []
-        all_disclosures.extend(self._fetch_disclosures_for_date(prev_date))
-        time.sleep(0.5)  # サーバー負荷対策
-        all_disclosures.extend(self._fetch_disclosures_for_date(target_date))
+        current_date = prev_business_day
+
+        while current_date <= target_date:
+            all_disclosures.extend(self._fetch_disclosures_for_date(current_date))
+            time.sleep(0.5)  # サーバー負荷対策
+            current_date += timedelta(days=1)
 
         logger.info(f"取得した全開示件数（フィルタ前）: {len(all_disclosures)}件")
 

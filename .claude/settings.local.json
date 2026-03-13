@@ -1,31 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(claude --version)",
-      "Bash(dir:*)",
-      "Bash(git init:*)",
-      "Bash(python -m venv:*)",
-      "Bash(venvScriptsactivate)",
-      "Bash(pip install:*)",
-      "Bash(.\\venv\\Scripts\\python.exe -m pip install:*)",
-      "Bash(venv/Scripts/python.exe -m pip:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      "Bash(git config:*)",
-      "Bash(gh --version:*)",
-      "Bash(winget install:*)",
-      "Bash(git remote add:*)",
-      "Bash(git branch:*)",
-      "Bash(git push:*)",
-      "Bash(venv/Scripts/python.exe:*)",
-      "Bash(npm update:*)",
-      "Bash(cat:*)",
-      "Bash(echo:*)",
-      "Bash(.env.example)",
-      "Bash(git fetch:*)",
-      "Bash(git pull:*)",
-      "Bash(python test_full_screening.py:*)",
-      "Bash(.venvScriptsactivate)"
-    ]
+      "Bash(timeout 60 ./venv/Scripts/python.exe:*)",
+      "Bash(.\\venv\\Scripts\\python.exe -m pip install:*)"
+    ],
+    "deny": [],
+    "ask": []
   }
 }

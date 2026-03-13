@@ -4,12 +4,29 @@
 from datetime import datetime, timedelta
 from dateutil import tz
 from loguru import logger
+import jpholiday
 from src.screening import Screener
 from src.utils.market_sentiment import MarketSentiment
 from src.utils.material_judge import MaterialJudge
 from src.utils.tdnet_scraper import TDnetScraper
 from src.utils.news_scraper import NewsScraper
 from src.utils.notifier import DiscordNotifier
+
+
+def get_previous_business_day(date):
+    """
+    直前の営業日を取得（土日祝日を除外）
+
+    Args:
+        date: 基準日 (datetime)
+
+    Returns:
+        datetime: 直前の営業日
+    """
+    prev_date = date - timedelta(days=1)
+    while prev_date.weekday() >= 5 or jpholiday.is_holiday(prev_date):
+        prev_date -= timedelta(days=1)
+    return prev_date
 
 
 def main():
@@ -24,9 +41,10 @@ def main():
 
     logger.info(f"実行日時: {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
-    # スクリーニング対象日: 前営業日（前日の引け後データを使用）
-    target_date = now - timedelta(days=1)
-    logger.info(f"スクリーニング対象日: {target_date.strftime('%Y-%m-%d')} (前営業日)")
+    # スクリーニング対象日: 直前の営業日（前日の引け後データを使用）
+    target_date = get_previous_business_day(now)
+    weekday_name = ['月', '火', '水', '木', '金', '土', '日'][target_date.weekday()]
+    logger.info(f"スクリーニング対象日: {target_date.strftime('%Y-%m-%d')} ({weekday_name}・前営業日)")
 
     # STEP 1a: 出来高急増銘柄を抽出
     logger.info("\n" + "=" * 60)
@@ -55,7 +73,7 @@ def main():
     logger.info("=" * 60)
 
     tdnet = TDnetScraper()
-    tdnet_codes = tdnet.get_disclosure_codes(target_date)
+    tdnet_codes = tdnet.get_disclosure_codes(now)  # 実行日で渡す（内部で営業日判定）
 
     if len(tdnet_codes) > 0:
         logger.success(f"引け後開示銘柄: {len(tdnet_codes)}銘柄")
