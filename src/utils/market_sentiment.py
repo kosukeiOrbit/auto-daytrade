@@ -2,6 +2,7 @@
 市場センチメント取得（NYダウ・ナスダック終値）
 """
 import requests
+import time
 from datetime import datetime, timedelta
 from loguru import logger
 
@@ -63,13 +64,15 @@ class MarketSentiment:
             logger.error(f"米国市場データ取得エラー: {e}")
             return None
 
-    def _fetch_yahoo_finance(self, symbol, date):
+    def _fetch_yahoo_finance(self, symbol, date, max_retries=3, retry_delay=1):
         """
-        Yahoo FinanceからOHLCVデータを取得
+        Yahoo FinanceからOHLCVデータを取得（リトライ機能付き）
 
         Args:
             symbol: シンボル（例: ^DJI, ^IXIC）
             date: 対象日
+            max_retries: 最大リトライ回数（デフォルト3回）
+            retry_delay: リトライ間隔（秒、デフォルト1秒）
 
         Returns:
             dict: {'close': float, 'change_pct': float}
@@ -85,33 +88,45 @@ class MarketSentiment:
             'interval': '1d'
         }
 
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(url, params=params, timeout=10)
+                response.raise_for_status()
 
-        data = response.json()
+                data = response.json()
 
-        # チャートデータを解析
-        chart = data['chart']['result'][0]
-        timestamps = chart['timestamp']
-        quotes = chart['indicators']['quote'][0]
+                # チャートデータを解析
+                chart = data['chart']['result'][0]
+                timestamps = chart['timestamp']
+                quotes = chart['indicators']['quote'][0]
 
-        # 最新の終値を取得
-        close_prices = quotes['close']
+                # 最新の終値を取得
+                close_prices = quotes['close']
 
-        # Noneを除外して最新の2つの終値を取得
-        valid_closes = [c for c in close_prices if c is not None]
+                # Noneを除外して最新の2つの終値を取得
+                valid_closes = [c for c in close_prices if c is not None]
 
-        if len(valid_closes) < 2:
-            raise ValueError(f"十分なデータが取得できませんでした: {symbol}")
+                if len(valid_closes) < 2:
+                    raise ValueError(f"十分なデータが取得できませんでした: {symbol}")
 
-        latest_close = valid_closes[-1]
-        prev_close = valid_closes[-2]
-        change_pct = ((latest_close - prev_close) / prev_close) * 100
+                latest_close = valid_closes[-1]
+                prev_close = valid_closes[-2]
+                change_pct = ((latest_close - prev_close) / prev_close) * 100
 
-        return {
-            'close': latest_close,
-            'change_pct': change_pct
-        }
+                return {
+                    'close': latest_close,
+                    'change_pct': change_pct
+                }
+
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    logger.warning(f"{symbol} 取得失敗 (試行{attempt + 1}/{max_retries}): {e} → {retry_delay}秒後にリトライ")
+                    time.sleep(retry_delay)
+                else:
+                    logger.error(f"{symbol} 取得失敗 ({max_retries}回試行): {e}")
+                    raise last_error
 
     def check_market_sentiment(self, dow_change_pct, nasdaq_change_pct, threshold=-2.0):
         """
