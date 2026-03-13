@@ -17,6 +17,9 @@ class Config:
     # J-Quants API
     JQUANTS_API_KEY = os.getenv('JQUANTS_API_KEY')
 
+    # Discord Webhook
+    DISCORD_WEBHOOK_URL = os.getenv('DISCORD_WEBHOOK_URL')
+
     # kabu Station API (フェーズ5で使用)
     KABU_API_URL = os.getenv('KABU_API_URL', 'http://localhost:18080/kabusapi')
     KABU_API_PASSWORD = os.getenv('KABU_API_PASSWORD')
