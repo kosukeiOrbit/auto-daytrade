@@ -202,11 +202,30 @@ class Screener:
             return pd.DataFrame()
 
         # 4. 4桁コードフィルタ（ETF等の5桁コードを除外）
-        # ※J-Quants APIのCodeは文字列型で、先頭ゼロ埋めされている可能性があるため
-        # ※一旦フィルタを無効化（全銘柄を対象とする）
-        # TODO: Code形式を確認後、必要に応じて有効化
-        logger.info(f"\n[4/5] 4桁コードフィルタ（スキップ）...")
-        logger.info(f"  全銘柄を対象: {len(df_filtered)}件")
+        # J-Quants APIのCodeは末尾0付き5桁整数で返される
+        # 例: 1301 → 13010, 6501 → 65010
+        # ETF等は末尾が0以外、または先頭4桁が範囲外（例: 48900, 17760）
+        logger.info(f"\n[4/5] 4桁コードフィルタ（通常株式のみ）...")
+
+        # Codeを数値に変換
+        df_filtered['CodeNum'] = pd.to_numeric(df_filtered['Code'], errors='coerce')
+
+        # フィルタ条件: 末尾が0 かつ 先頭4桁が1000-9999
+        df_filtered = df_filtered[
+            (df_filtered['CodeNum'] % 10 == 0) &           # 末尾が0
+            (df_filtered['CodeNum'] // 10 >= 1000) &       # 先頭4桁が1000以上
+            (df_filtered['CodeNum'] // 10 <= 9999)         # 先頭4桁が9999以下
+        ].copy()
+
+        # 4桁コードに変換（表示用）
+        df_filtered['Code4'] = (df_filtered['CodeNum'] // 10).astype(int)
+        df_filtered = df_filtered.drop(columns=['CodeNum'])
+
+        logger.info(f"4桁コード銘柄: {len(df_filtered)}件")
+
+        if len(df_filtered) == 0:
+            logger.warning("4桁コード銘柄が見つかりませんでした")
+            return pd.DataFrame()
 
         # MA25は参考値として計算するが、フィルタには使用しない
         logger.info(f"\n25日移動平均を計算中（参考値）...")
@@ -227,10 +246,12 @@ class Screener:
             logger.info(f"\n[5/5] 予算フィルタはスキップ")
 
         # 結果を整形（出来高急増率で降順ソート）
+        # Code4（4桁コード）をCodeとして使用
         result = df_filtered[[
-            'Code', 'Date', 'O', 'H', 'L', 'C', 'Vo',
+            'Code4', 'Date', 'O', 'H', 'L', 'C', 'Vo',
             'AvgVolume', 'VolumeSurgeRatio', 'MA25'
         ]].copy()
+        result = result.rename(columns={'Code4': 'Code'})
         result = result.sort_values('VolumeSurgeRatio', ascending=False)
         result = result.reset_index(drop=True)
 
