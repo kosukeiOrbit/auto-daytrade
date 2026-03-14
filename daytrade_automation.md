@@ -180,6 +180,8 @@ STEP 8: ポジション監視（5分ごと）
 
 ### フェーズ6：自動発注（口座開設完了後）
 - [ ] kabuステーション APIセットアップ（口座開設審査中）
+- [ ] kabuステーションAPIから買付余力を動的取得し、Screener(budget=...)に渡すようmorning_screening.pyを修正（現在は800000固定、INVESTMENT_RATIO=0.95を.envで設定可能にする）
+- [ ] Discord通知に「本日の投資予算: XX万円」を追加
 - [ ] kabuステーションAPIで買い注文の発注
 - [ ] 逆指値・利確注文のセット
 - [ ] 安全装置の実装
@@ -557,6 +559,17 @@ sequenceDiagram
 5. **STEP 4**: Claude APIで各銘柄の材料を判定（has_material, strength, material_type）
 6. **STEP 5**: 最終候補リストをCSV出力
 7. **STEP 6**: Discord Webhookで朝スクリーニング結果を通知
+
+---
+
+## フェーズ6 実装メモ（Claude Codeへの依頼内容）
+
+### 買付余力の動的取得
+- kabuステーションAPI `GET /kabusapi/account/wallet/cash` で現物買付余力を取得
+- `config.py` に `INVESTMENT_RATIO = float(os.getenv('INVESTMENT_RATIO', '0.95'))` を追加
+- `morning_screening.py` の `Screener(budget=800000)` を
+  `Screener(budget=int(buying_power * Config.INVESTMENT_RATIO))` に変更
+- Discord通知の朝レポートに「本日の投資予算: XX万円」を追加
 
 ---
 
