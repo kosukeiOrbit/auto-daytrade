@@ -172,3 +172,33 @@ class DiscordNotifier:
         """
         content = f"🚨 **エラー**: {message}"
         self._send_message(content)
+
+    def send_trade_notification(self, action, symbol, price, qty, stop_price=None, target_price=None):
+        """
+        取引通知を送信
+
+        Args:
+            action: アクション（エントリー、決済など）
+            symbol: 銘柄コード
+            price: 価格
+            qty: 数量
+            stop_price: 損切り価格（オプション）
+            target_price: 利確価格（オプション）
+        """
+        content = f"📈 **{action}**\n{symbol} | {qty}株 @ {price:.0f}円\n"
+
+        if stop_price:
+            content += f"損切り: {stop_price:.0f}円\n"
+        if target_price:
+            content += f"利確: {target_price:.0f}円\n"
+
+        self._send_message(content)
+
+    def send_message(self, message):
+        """
+        汎用メッセージ送信
+
+        Args:
+            message: 送信するメッセージ
+        """
+        self._send_message(message)
