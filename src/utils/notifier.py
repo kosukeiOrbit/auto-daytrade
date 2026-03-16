@@ -105,11 +105,8 @@ class DiscordNotifier:
             surge_ratio = row.get('VolumeSurgeRatio', 0)
             close_price = row.get('C', 0)
             company_name = judgment.get('company_name', '')
-            small_cap_flag = row.get('SmallCapFlag', False)
 
-            # 小型株フラグを表示
-            small_cap_warning = " ⚠️小型注意" if small_cap_flag else ""
-            content += f"**{rank}位 {code} {company_name}** ×{surge_ratio:.1f}倍 | {close_price:.0f}円{small_cap_warning}\n"
+            content += f"**{rank}位 {code} {company_name}** ×{surge_ratio:.1f}倍 | {close_price:.0f}円\n"
 
             # 材料判定結果
             material_type = judgment.get('material_type', '-')
