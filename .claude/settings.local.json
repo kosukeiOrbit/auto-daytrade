@@ -7,7 +7,9 @@
       "Bash(cmd /c \"schtasks /query /fo LIST\")",
       "Bash(timeout:*)",
       "Bash(./venv/Scripts/pip:*)",
-      "Bash(.venvScriptspython.exe test_kabu_api.py)"
+      "Bash(.venvScriptspython.exe test_kabu_api.py)",
+      "Bash(.\\venv\\Scripts\\python.exe:*)",
+      "Bash(iconv:*)"
     ],
     "deny": [],
     "ask": []

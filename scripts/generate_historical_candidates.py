@@ -196,9 +196,9 @@ def main():
     logger.info("STEP 3: 日付ごとにスクリーニング実行")
     logger.info("=" * 60)
 
-    # 日付カラムをdatetime型に変換
+    # 日付カラムをdatetime型に変換（時刻部分を正規化: 00:00:00）
     if 'Date' in df_all.columns:
-        df_all['Date'] = pd.to_datetime(df_all['Date'])
+        df_all['Date'] = pd.to_datetime(df_all['Date']).dt.normalize()
     else:
         logger.error("Dateカラムが見つかりません")
         return
@@ -220,8 +220,8 @@ def main():
         logger.info(f"[{i}/{len(business_days)}] {date.strftime('%Y-%m-%d')}: 処理中...")
 
         try:
-            # その日のデータを抽出
-            df_day = df_all[df_all['Date'] == pd.Timestamp(date)].copy()
+            # その日のデータを抽出（Timestamp型で比較）
+            df_day = df_all[df_all['Date'] == pd.Timestamp(date.date())].copy()
 
             if len(df_day) == 0:
                 logger.warning(f"{date_str}: データなし（休場日の可能性）")
