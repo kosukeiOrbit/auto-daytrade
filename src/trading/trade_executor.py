@@ -193,11 +193,11 @@ class TradeExecutor:
             entry_order_id = entry_result['order_id']
             logger.success(f"{symbol}: エントリー注文成功 注文番号={entry_order_id}")
 
-            # 損切り価格（-5%）
-            stop_price = int(current_price * 0.95)
+            # 損切り価格（-1%）デイトレルール
+            stop_price = int(current_price * 0.99)
 
-            # 利確価格（+10%）
-            target_price = int(current_price * 1.10)
+            # 利確価格（+2%）デイトレルール（R倍数2.0）
+            target_price = int(current_price * 1.02)
 
             # 逆指値（損切り）注文
             logger.info(f"{symbol}: 逆指値注文 {qty}株 @ {stop_price}円以下で成行売")
@@ -314,6 +314,112 @@ class TradeExecutor:
         self.notifier.send_message(
             f"自動売買完了\nエントリー: {entry_count}銘柄\n候補: {len(candidates_df)}銘柄"
         )
+
+    def force_exit_losing_positions_midday(self):
+        """
+        11:30（前場引け）の含み損ポジション強制成行決済
+        """
+        now = datetime.now()
+        current_time = now.time()
+
+        # 11:30チェック（11:25-11:35の間に実行）
+        if not (now.replace(hour=11, minute=25, second=0) <= now <= now.replace(hour=11, minute=35, second=0)):
+            logger.debug("前場引け時刻外のため、含み損決済スキップ")
+            return
+
+        logger.info("=" * 60)
+        logger.info("前場引け: 含み損ポジション強制決済チェック")
+        logger.info("=" * 60)
+
+        try:
+            positions = self.kabu_client.get_positions()
+
+            for pos in positions:
+                symbol = pos['symbol']
+                profit_loss = pos['profit_loss']
+                qty = pos['qty']
+
+                # 含み損の場合のみ決済
+                if profit_loss < 0:
+                    logger.warning(f"{symbol}: 含み損 {profit_loss:,.0f}円 → 前場引け強制決済")
+
+                    # 成行売り注文
+                    self.kabu_client.send_order(
+                        symbol=symbol,
+                        exchange=1,
+                        side=1,  # 1=売
+                        qty=qty,
+                        order_type=1,  # 1=成行
+                        price=0
+                    )
+
+                    # Discord通知
+                    self.notifier.send_trade_notification(
+                        action="前場引け強制決済",
+                        symbol=symbol,
+                        price=pos['current_price'],
+                        qty=qty
+                    )
+
+                    logger.success(f"{symbol}: 前場引け強制決済完了")
+
+        except Exception as e:
+            logger.error(f"前場引け強制決済エラー: {e}")
+
+    def force_exit_all_positions_eod(self):
+        """
+        15:20（大引け10分前）の全ポジション強制決済
+        """
+        now = datetime.now()
+
+        # 15:20チェック（15:15-15:25の間に実行）
+        if not (now.replace(hour=15, minute=15, second=0) <= now <= now.replace(hour=15, minute=25, second=0)):
+            logger.debug("大引け前時刻外のため、全決済スキップ")
+            return
+
+        logger.info("=" * 60)
+        logger.info("大引け10分前: 全ポジション強制決済")
+        logger.info("=" * 60)
+
+        try:
+            positions = self.kabu_client.get_positions()
+
+            if len(positions) == 0:
+                logger.info("決済対象ポジションなし")
+                return
+
+            for pos in positions:
+                symbol = pos['symbol']
+                profit_loss = pos['profit_loss']
+                qty = pos['qty']
+
+                logger.info(f"{symbol}: 損益={profit_loss:,.0f}円 → 大引け前強制決済")
+
+                # 成行売り注文
+                self.kabu_client.send_order(
+                    symbol=symbol,
+                    exchange=1,
+                    side=1,  # 1=売
+                    qty=qty,
+                    order_type=1,  # 1=成行
+                    price=0
+                )
+
+                # Discord通知
+                self.notifier.send_trade_notification(
+                    action="大引け前強制決済",
+                    symbol=symbol,
+                    price=pos['current_price'],
+                    qty=qty
+                )
+
+                logger.success(f"{symbol}: 大引け前強制決済完了")
+
+            # 完了通知
+            self.notifier.send_message(f"大引け前強制決済完了: {len(positions)}銘柄")
+
+        except Exception as e:
+            logger.error(f"大引け前強制決済エラー: {e}")
 
     def monitor_positions(self):
         """
