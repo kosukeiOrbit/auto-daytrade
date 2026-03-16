@@ -201,7 +201,7 @@ class Screener:
         logger.info(f"平均出来高計算可能: {len(df_target)}件")
 
         # 3. 出来高急増フィルタ
-        logger.info(f"\n[3/6] 出来高急増フィルタ（{surge_threshold}倍以上）...")
+        logger.info(f"\n[3/7] 出来高急増フィルタ（{surge_threshold}倍以上）...")
         df_target['VolumeSurgeRatio'] = df_target['Vo'] / df_target['AvgVolume']
         df_filtered = df_target[df_target['VolumeSurgeRatio'] >= surge_threshold].copy()
         logger.info(f"出来高急増銘柄: {len(df_filtered)}件")
@@ -210,11 +210,23 @@ class Screener:
             logger.warning("条件に合う銘柄が見つかりませんでした")
             return pd.DataFrame()
 
+        # 3.5. 売買代金フィルタ（3,000万円未満を除外）
+        logger.info(f"\n[3.5/7] 売買代金フィルタ（3,000万円以上）...")
+        df_filtered['TradingValue'] = df_filtered['C'] * df_filtered['Vo']
+        before_count = len(df_filtered)
+        df_filtered = df_filtered[df_filtered['TradingValue'] >= 30_000_000].copy()
+        excluded_count = before_count - len(df_filtered)
+        logger.info(f"  除外: {excluded_count}件（薄商い株）, 残存: {len(df_filtered)}件")
+
+        if len(df_filtered) == 0:
+            logger.warning("売買代金フィルタ後、候補銘柄がなくなりました")
+            return pd.DataFrame()
+
         # 4. 4桁コードフィルタ（ETF等の5桁コードを除外）
         # J-Quants APIのCodeは末尾0付き5桁整数で返される
         # 例: 1301 → 13010, 6501 → 65010
         # ETF等は末尾が0以外、または先頭4桁が範囲外（例: 48900, 17760）
-        logger.info(f"\n[4/5] 4桁コードフィルタ（通常株式のみ）...")
+        logger.info(f"\n[4/7] 4桁コードフィルタ（通常株式のみ）...")
 
         # Codeを数値に変換
         df_filtered['CodeNum'] = pd.to_numeric(df_filtered['Code'], errors='coerce')
@@ -238,7 +250,7 @@ class Screener:
 
         # 4.5. MktNmでETF・ETN・REIT除外（「その他」市場を除外）
         if self.listed_info is not None:
-            logger.info(f"\n[4.5/5] ETF・ETN・REIT除外フィルタ...")
+            logger.info(f"\n[4.5/7] ETF・ETN・REIT除外フィルタ...")
 
             # 上場銘柄情報とマージ（Code4を使用）
             # listed_infoのCodeは5桁（末尾0付き）なので、10で割って4桁に変換
@@ -274,7 +286,7 @@ class Screener:
                 logger.warning("ETF・ETN・REIT除外後、候補銘柄がなくなりました")
                 return pd.DataFrame()
         else:
-            logger.warning(f"\n[4.5/5] 上場銘柄情報が取得できていないため、ETF・ETN・REIT除外をスキップ")
+            logger.warning(f"\n[4.5/7] 上場銘柄情報が取得できていないため、ETF・ETN・REIT除外をスキップ")
 
         # MA25は参考値として計算するが、フィルタには使用しない
         logger.info(f"\n25日移動平均を計算中（参考値）...")
@@ -285,20 +297,57 @@ class Screener:
         df_filtered = df_filtered.merge(df_ma, on='Code', how='left')
         logger.info(f"MA25計算完了")
 
-        # 5. 予算内フィルタ
+        # 5. 時価総額計算（小型株フラグ用）
+        logger.info(f"\n[5/7] 時価総額計算中...")
+        # 時価総額（億円）= 終値 × 発行済株式数 / 100,000,000
+        # ※ 発行済株式数は上場銘柄情報から取得
+        if self.listed_info is not None:
+            # 上場銘柄情報から発行済株式数を取得（CompanyName列があればそれをマージ）
+            listed_info_4digit = self.listed_info.copy()
+            listed_info_4digit['Code4'] = (pd.to_numeric(listed_info_4digit['Code'], errors='coerce') // 10).astype('Int64')
+
+            # IssuedShareEquityQty列が存在する場合はマージ
+            if 'IssuedShareEquityQty' in listed_info_4digit.columns:
+                df_filtered = df_filtered.merge(
+                    listed_info_4digit[['Code4', 'IssuedShareEquityQty']],
+                    on='Code4',
+                    how='left'
+                )
+                # 時価総額（億円）を計算
+                df_filtered['MarketCap'] = (df_filtered['C'] * df_filtered['IssuedShareEquityQty'] / 100_000_000).fillna(0)
+
+                # 小型株フラグ（50億円未満）
+                df_filtered['SmallCapFlag'] = df_filtered['MarketCap'] < 50
+
+                small_cap_count = df_filtered['SmallCapFlag'].sum()
+                logger.info(f"  時価総額50億円未満: {small_cap_count}件（⚠️小型注意フラグ）")
+
+                # IssuedShareEquityQty列を削除
+                df_filtered = df_filtered.drop(columns=['IssuedShareEquityQty'], errors='ignore')
+            else:
+                logger.warning("  発行済株式数情報がないため、時価総額計算をスキップ")
+                df_filtered['MarketCap'] = 0
+                df_filtered['SmallCapFlag'] = False
+        else:
+            logger.warning("  上場銘柄情報がないため、時価総額計算をスキップ")
+            df_filtered['MarketCap'] = 0
+            df_filtered['SmallCapFlag'] = False
+
+        # 6. 予算内フィルタ
         if self.budget:
-            logger.info(f"\n[5/5] 予算内フィルタ (1単元100株 ≤ {self.budget:,}円)...")
+            logger.info(f"\n[6/7] 予算内フィルタ (1単元100株 ≤ {self.budget:,}円)...")
             df_filtered['UnitPrice'] = df_filtered['C'] * 100
             df_filtered = df_filtered[df_filtered['UnitPrice'] <= self.budget].copy()
             logger.info(f"予算内銘柄: {len(df_filtered)}件")
         else:
-            logger.info(f"\n[5/5] 予算フィルタはスキップ")
+            logger.info(f"\n[6/7] 予算フィルタはスキップ")
 
         # 結果を整形（出来高急増率で降順ソート）
         # Code4（4桁コード）をCodeとして使用
         result = df_filtered[[
             'Code4', 'Date', 'O', 'H', 'L', 'C', 'Vo',
-            'AvgVolume', 'VolumeSurgeRatio', 'MA25'
+            'AvgVolume', 'VolumeSurgeRatio', 'MA25', 'TradingValue',
+            'MarketCap', 'SmallCapFlag'
         ]].copy()
         result = result.rename(columns={'Code4': 'Code'})
         result = result.sort_values('VolumeSurgeRatio', ascending=False)
@@ -306,6 +355,9 @@ class Screener:
 
         logger.info("\n" + "=" * 60)
         logger.success(f"出来高急増スクリーニング完了: {len(result)}銘柄")
+        small_cap_in_result = result['SmallCapFlag'].sum()
+        if small_cap_in_result > 0:
+            logger.warning(f"  ⚠️ うち小型株（時価総額50億円未満）: {small_cap_in_result}銘柄")
         logger.info("=" * 60)
 
         return result
