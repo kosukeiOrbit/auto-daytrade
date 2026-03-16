@@ -50,7 +50,7 @@ class DiscordNotifier:
             logger.error(f"Discord通知送信エラー: {e}")
             return False
 
-    def send_morning_report(self, candidates_df, judgments, sentiment=None, tdnet_count=0):
+    def send_morning_report(self, candidates_df, judgments, sentiment=None, tdnet_count=0, budget=None):
         """
         朝のスクリーニング結果を送信
 
@@ -59,6 +59,7 @@ class DiscordNotifier:
             judgments: Claude判定結果（dict: {code: judgment}）
             sentiment: 地合い情報（dict or None）
             tdnet_count: TDnet開示件数（int）
+            budget: 本日の投資予算（int、オプション）
         """
         if candidates_df is None or len(candidates_df) == 0:
             content = f"📊 **{datetime.now().strftime('%Y/%m/%d')} 朝スクリーニング結果**\n❌ 候補銘柄なし"
@@ -67,6 +68,10 @@ class DiscordNotifier:
 
         # メッセージ構築
         content = f"📊 **{datetime.now().strftime('%Y/%m/%d')} 朝スクリーニング結果**\n"
+
+        # 投資予算
+        if budget:
+            content += f"💰 本日の投資予算: {budget:,}円\n"
 
         # 候補数
         material_count = sum(1 for j in judgments.values() if j and j.get('has_material', False))

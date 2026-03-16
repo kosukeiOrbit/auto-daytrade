@@ -27,6 +27,9 @@ class Config:
     KABU_API_URL = os.getenv('KABU_API_URL', 'http://localhost:18080/kabusapi')
     KABU_API_PASSWORD = os.getenv('KABU_API_PASSWORD')
 
+    # 投資比率（買付余力の何%を使うか）
+    INVESTMENT_RATIO = float(os.getenv('INVESTMENT_RATIO', '0.95'))
+
     @classmethod
     def validate(cls):
         """必須の設定が存在するかチェック"""

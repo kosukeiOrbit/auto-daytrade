@@ -13,6 +13,8 @@ from src.utils.material_judge import MaterialJudge
 from src.utils.tdnet_scraper import TDnetScraper
 from src.utils.news_scraper import NewsScraper
 from src.utils.notifier import DiscordNotifier
+from src.utils.kabu_client import KabuClient
+from src.utils.config import Config
 
 # ログファイル設定（タスクスケジューラ実行時のログ保存用）
 os.makedirs("logs", exist_ok=True)
@@ -58,12 +60,36 @@ def main():
     weekday_name = ['月', '火', '水', '木', '金', '土', '日'][target_date.weekday()]
     logger.info(f"スクリーニング対象日: {target_date.strftime('%Y-%m-%d')} ({weekday_name}・前営業日)")
 
+    # STEP 0: 買付余力取得（kabu Station API）
+    logger.info("\n" + "=" * 60)
+    logger.info("STEP 0: 買付余力取得")
+    logger.info("=" * 60)
+
+    try:
+        kabu_client = KabuClient()
+        wallet = kabu_client.get_wallet_cash()
+        available_cash = wallet['stock_account_wallet']
+
+        # 検証環境の場合（nullの場合）は固定予算を使用
+        if available_cash is None:
+            budget = 800_000
+            logger.warning(f"検証環境のため固定予算を使用: {budget:,}円")
+        else:
+            # 本番環境: 買付余力 × 投資比率
+            budget = int(available_cash * Config.INVESTMENT_RATIO)
+            logger.info(f"買付余力: {available_cash:,}円 × {Config.INVESTMENT_RATIO} = 本日の投資予算: {budget:,}円")
+
+    except Exception as e:
+        # API取得失敗時は固定予算を使用
+        budget = 800_000
+        logger.warning(f"買付余力取得エラー、固定予算を使用: {e}")
+
     # STEP 1a: 出来高急増銘柄を抽出
     logger.info("\n" + "=" * 60)
     logger.info("STEP 1a: 出来高急増銘柄を抽出")
     logger.info("=" * 60)
 
-    screener = Screener(budget=800_000)  # 予算80万円
+    screener = Screener(budget=budget)
     volume_candidates = screener.get_volume_surge_candidates(
         surge_threshold=2.0,  # 20日平均の2倍以上
         lookback_days=20,
@@ -79,7 +105,8 @@ def main():
             candidates_df=pd.DataFrame(),
             judgments={},
             sentiment=None,
-            tdnet_count=0
+            tdnet_count=0,
+            budget=budget
         )
 
         logger.info("=" * 60)
@@ -230,7 +257,8 @@ def main():
         candidates_df=candidates,
         judgments=judgments,
         sentiment=us_market,
-        tdnet_count=len(tdnet_codes)
+        tdnet_count=len(tdnet_codes),
+        budget=budget
     )
 
     logger.info("\n" + "=" * 60)

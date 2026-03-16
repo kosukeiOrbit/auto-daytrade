@@ -126,7 +126,7 @@ class TradeExecutor:
 
     def calculate_position_size(self, current_price):
         """
-        ポジションサイズを計算
+        ポジションサイズを計算（買付余力に応じて動的に調整）
 
         Args:
             current_price: 現在株価
@@ -134,8 +134,27 @@ class TradeExecutor:
         Returns:
             int: 購入株数（単元株数の倍数）
         """
+        # 買付余力を取得
+        try:
+            wallet = self.kabu_client.get_wallet_cash()
+            available_cash = wallet['stock_account_wallet']
+
+            # 検証環境の場合（nullの場合）は固定予算を使用
+            if available_cash is None:
+                usable_budget = self.budget
+                logger.warning(f"検証環境のため固定予算を使用: {self.budget:,}円")
+            else:
+                # 本番環境: 買付余力と予算の小さい方を使用
+                usable_budget = min(available_cash, self.budget)
+                logger.info(f"買付余力: {available_cash:,}円, 使用予算: {usable_budget:,}円")
+
+        except Exception as e:
+            # API取得失敗時は固定予算を使用
+            logger.warning(f"買付余力取得エラー、固定予算を使用: {e}")
+            usable_budget = self.budget
+
         # 1銘柄あたりの予算で購入できる株数
-        qty = int(self.budget / current_price)
+        qty = int(usable_budget / current_price)
 
         # 単元株（100株）の倍数に調整
         qty = (qty // 100) * 100
@@ -144,7 +163,7 @@ class TradeExecutor:
             logger.warning(f"予算不足: 現在値={current_price}円では100株未満")
             return 0
 
-        logger.info(f"ポジションサイズ: {qty}株 (現在値={current_price}円)")
+        logger.info(f"ポジションサイズ: {qty}株 (現在値={current_price}円, 予算={usable_budget:,}円)")
         return qty
 
     def entry_with_stop_and_target(self, symbol, exchange=1):
