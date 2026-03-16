@@ -29,6 +29,14 @@ class Screener:
             logger.warning(f"上場銘柄情報の取得に失敗しました: {e}")
             self.listed_info = None
 
+        # 財務情報を取得（発行済株式数取得用）
+        try:
+            self.statements = self.client.get_statements()
+            logger.info(f"財務情報を取得しました: {len(self.statements)}件")
+        except Exception as e:
+            logger.warning(f"財務情報の取得に失敗しました: {e}")
+            self.statements = None
+
         logger.info(f"スクリーナーを初期化しました (予算: {budget:,}円)" if budget else "スクリーナーを初期化しました (予算: 制限なし)")
 
     def get_candidates(
@@ -316,21 +324,35 @@ class Screener:
         # 5. 時価総額フィルタ（50億円未満を除外）
         logger.info(f"\n[5/7] 時価総額フィルタ（50億円以上）...")
         # 時価総額（億円）= 終値 × 発行済株式数 / 100,000,000
-        # ※ 発行済株式数は上場銘柄情報から取得
-        if self.listed_info is not None:
-            # 上場銘柄情報から発行済株式数を取得
-            listed_info_4digit = self.listed_info.copy()
-            listed_info_4digit['Code4'] = (pd.to_numeric(listed_info_4digit['Code'], errors='coerce') // 10).astype('Int64')
+        # ※ 発行済株式数は財務情報から取得（/fins/summary の ShOutFY フィールド）
+        if self.statements is not None:
+            # 財務情報から最新の発行済株式数を取得
+            # 各銘柄の最新データのみを使用（DiscDate が最大のレコード）
+            if 'DiscDate' in self.statements.columns:
+                statements_latest = self.statements.sort_values('DiscDate').groupby('Code').tail(1).copy()
+            else:
+                # DiscDate がない場合は全データを使用（後方互換性）
+                statements_latest = self.statements.copy()
 
-            # IssuedShareEquityQty列が存在する場合はマージして除外
-            if 'IssuedShareEquityQty' in listed_info_4digit.columns:
+            # 4桁コードに変換
+            statements_latest['Code4'] = (pd.to_numeric(statements_latest['Code'], errors='coerce') // 10).astype('Int64')
+
+            # 発行済株式数カラムが存在する場合はマージして除外
+            # J-Quants V2 API /fins/summary の ShOutFY フィールド（期末発行済株式数）
+            issued_shares_col = 'ShOutFY'
+            if issued_shares_col in statements_latest.columns:
+                # 発行済株式数を取得
+                df_shares = statements_latest[['Code4', issued_shares_col]].copy()
+                df_shares = df_shares.rename(columns={issued_shares_col: 'IssuedShares'})
+
                 df_filtered = df_filtered.merge(
-                    listed_info_4digit[['Code4', 'IssuedShareEquityQty']],
+                    df_shares,
                     on='Code4',
                     how='left'
                 )
+
                 # 時価総額（億円）を計算
-                df_filtered['MarketCap'] = (df_filtered['C'] * df_filtered['IssuedShareEquityQty'] / 100_000_000).fillna(0)
+                df_filtered['MarketCap'] = (df_filtered['C'] * df_filtered['IssuedShares'] / 100_000_000).fillna(0)
 
                 before_count = len(df_filtered)
                 # 時価総額50億円未満を除外
@@ -338,17 +360,18 @@ class Screener:
                 excluded_count = before_count - len(df_filtered)
                 logger.info(f"  除外: {excluded_count}件（小型株）, 残存: {len(df_filtered)}件")
 
-                # IssuedShareEquityQty列を削除
-                df_filtered = df_filtered.drop(columns=['IssuedShareEquityQty'], errors='ignore')
+                # IssuedShares列を削除
+                df_filtered = df_filtered.drop(columns=['IssuedShares'], errors='ignore')
 
                 if len(df_filtered) == 0:
                     logger.warning("時価総額フィルタ後、候補銘柄がなくなりました")
                     return pd.DataFrame()
             else:
-                logger.warning("  発行済株式数情報がないため、時価総額フィルタをスキップ")
+                logger.warning(f"  発行済株式数情報がないため、時価総額フィルタをスキップ (列名: {issued_shares_col})")
+                logger.warning(f"  利用可能なカラム: {sorted(statements_latest.columns.tolist())}")
                 df_filtered['MarketCap'] = 0
         else:
-            logger.warning("  上場銘柄情報がないため、時価総額フィルタをスキップ")
+            logger.warning("  財務情報がないため、時価総額フィルタをスキップ")
             df_filtered['MarketCap'] = 0
 
         # 6. 赤字銘柄フィルタ（財務データが必要 - 未実装）

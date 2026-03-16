@@ -90,3 +90,32 @@ class JQuantsClient:
         except Exception as e:
             logger.error(f"日次株価データ取得エラー: {e}")
             raise
+
+    def get_statements(self):
+        """
+        財務情報を取得（発行済株式数を含む）
+
+        Note:
+            J-Quants API V2の /v2/fins/summary エンドポイントを使用
+            全銘柄のデータを取得するため、直近90日分を範囲取得
+
+        Returns:
+            DataFrame: 財務情報データ
+                - Code: 銘柄コード
+                - NumberOfIssuedAndOutstandingSharesAtTheEndOfFiscalYearIncludingTreasuryStock: 期末発行済株式数
+                - その他財務情報
+        """
+        try:
+            logger.info("財務情報を取得中（直近90日分）...")
+
+            # 直近90日分のデータを取得（全銘柄の最新財務情報を含めるため）
+            from datetime import datetime, timedelta
+            end_dt = datetime.now(tz.gettz("Asia/Tokyo"))
+            start_dt = end_dt - timedelta(days=90)
+
+            df = self.client.get_fin_summary_range(start_dt=start_dt, end_dt=end_dt)
+            logger.success(f"財務情報を取得しました: {len(df)}件")
+            return df
+        except Exception as e:
+            logger.error(f"財務情報取得エラー: {e}")
+            raise
