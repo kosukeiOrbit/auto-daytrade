@@ -118,7 +118,8 @@ def main():
     logger.info("=" * 60)
 
     sentiment = MarketSentiment()
-    us_market = sentiment.get_us_market_close()
+    # target_date（日本の前営業日）を渡して、対応する米国市場の終値を取得
+    us_market = sentiment.get_us_market_close(date=target_date)
 
     if us_market is None:
         logger.warning("米国市場データ取得失敗 → 地合いチェックスキップ")
