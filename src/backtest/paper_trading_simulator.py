@@ -11,7 +11,7 @@ import glob
 import pandas as pd
 from datetime import datetime, timedelta
 from loguru import logger
-from src.data_fetcher import JQuantsClient
+from src.utils.jquants_client import JQuantsClient
 from src.utils.notifier import DiscordNotifier
 
 
@@ -28,13 +28,18 @@ class PaperTradingSimulator:
 
     def load_candidate_files(self):
         """
-        results/ フォルダから全 candidates_YYYYMMDD.csv を検索
+        data/ フォルダから全 candidates_YYYYMMDD.csv を検索
 
         Returns:
             list: [(date: str, file_path: str), ...]
         """
-        pattern = os.path.join("results", "candidates_*.csv")
-        files = glob.glob(pattern)
+        # data/とresults/の両方を検索
+        pattern1 = os.path.join("data", "candidates_*.csv")
+        pattern2 = os.path.join("results", "candidates_*.csv")
+        files = glob.glob(pattern1) + glob.glob(pattern2)
+
+        # test用のファイルは除外
+        files = [f for f in files if 'test' not in f.lower()]
 
         if len(files) == 0:
             logger.warning("候補銘柄CSVが見つかりません")
@@ -203,24 +208,25 @@ class PaperTradingSimulator:
             pd.Series: OHLCV or None
         """
         try:
-            # 前後3日分を取得（祝日・休場対応）
-            start_date = (date - timedelta(days=3)).strftime('%Y-%m-%d')
-            end_date = (date + timedelta(days=3)).strftime('%Y-%m-%d')
-
-            df = self.jquants.get_daily_ohlcv(code, start_date, end_date)
+            # J-Quants APIから当日の株価データを取得
+            df = self.jquants.get_daily_quotes(code=code, date=date)
 
             if df is None or len(df) == 0:
                 return None
 
-            # 指定日のデータを抽出
-            target_date_str = date.strftime('%Y-%m-%d')
-            df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
-            target_row = df[df['Date'] == target_date_str]
+            # 最初の行を返す（通常1銘柄1日分）
+            row = df.iloc[0]
 
-            if len(target_row) == 0:
-                return None
+            # カラム名をOHLCVに変換
+            result = pd.Series({
+                'Open': row.get('Open'),
+                'High': row.get('High'),
+                'Low': row.get('Low'),
+                'Close': row.get('Close'),
+                'Volume': row.get('Volume')
+            })
 
-            return target_row.iloc[0]
+            return result
 
         except Exception as e:
             logger.debug(f"{code}: 株価データ取得エラー: {e}")
