@@ -231,6 +231,23 @@ def main():
     logger.info("STEP 5: 最終候補リスト出力")
     logger.info("=" * 60)
 
+    # 材料判定結果をDataFrameにマージ
+    candidates['has_material'] = False
+    candidates['material_strength'] = ''
+    candidates['material_type'] = ''
+    candidates['material_summary'] = ''
+
+    for code, judgment in judgments.items():
+        if judgment and not judge.should_exclude(judgment):
+            # 材料あり（Claudeが採用と判定）
+            mask = candidates['Code'].astype(str) == code
+            candidates.loc[mask, 'has_material'] = True
+            candidates.loc[mask, 'material_strength'] = judgment.get('strength', '')
+            candidates.loc[mask, 'material_type'] = judgment.get('material_type', '')
+            candidates.loc[mask, 'material_summary'] = judgment.get('summary', '')
+
+    logger.info(f"材料判定済み銘柄: {candidates['has_material'].sum()}件")
+
     # CSV保存（当日の日付で保存）
     output_path = f"data/candidates_{now.strftime('%Y%m%d')}.csv"
     screener.save_candidates(candidates, filepath=output_path)

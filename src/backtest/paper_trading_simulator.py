@@ -140,53 +140,88 @@ class PaperTradingSimulator:
 
                 logger.info(f"{date_str}: 候補銘柄 {len(candidates_df)}件")
 
+                # 1日1銘柄集中: material_strength優先で選択
+                top_candidate = None
+                selection_reason = ""
+
+                if 'material_strength' in candidates_df.columns and 'VolumeSurgeRatio' in candidates_df.columns:
+                    # 優先順位1: material_strength == '強' の中でVolumeSurgeRatio最大
+                    strong_df = candidates_df[candidates_df['material_strength'] == '強']
+                    if len(strong_df) > 0:
+                        strong_df = strong_df.sort_values('VolumeSurgeRatio', ascending=False)
+                        top_candidate = strong_df.iloc[0]
+                        selection_reason = f"材料強 (VolumeSurgeRatio={top_candidate.get('VolumeSurgeRatio', 0):.1f}倍)"
+                    else:
+                        # 優先順位2: material_strength == '中' の中でVolumeSurgeRatio最大
+                        medium_df = candidates_df[candidates_df['material_strength'] == '中']
+                        if len(medium_df) > 0:
+                            medium_df = medium_df.sort_values('VolumeSurgeRatio', ascending=False)
+                            top_candidate = medium_df.iloc[0]
+                            selection_reason = f"材料中 (VolumeSurgeRatio={top_candidate.get('VolumeSurgeRatio', 0):.1f}倍)"
+                        else:
+                            # 優先順位3: VolumeSurgeRatio最大
+                            candidates_df = candidates_df.sort_values('VolumeSurgeRatio', ascending=False)
+                            top_candidate = candidates_df.iloc[0]
+                            selection_reason = f"VolumeSurgeRatio最大 ({top_candidate.get('VolumeSurgeRatio', 0):.1f}倍)"
+                elif 'VolumeSurgeRatio' in candidates_df.columns:
+                    # material_strengthカラムがない場合: VolumeSurgeRatio最大
+                    candidates_df = candidates_df.sort_values('VolumeSurgeRatio', ascending=False)
+                    top_candidate = candidates_df.iloc[0]
+                    selection_reason = f"VolumeSurgeRatio最大 ({top_candidate.get('VolumeSurgeRatio', 0):.1f}倍・材料情報なし)"
+                else:
+                    # どちらもない場合は最初の銘柄
+                    top_candidate = candidates_df.iloc[0]
+                    selection_reason = "最初の銘柄（カラムなし）"
+                    logger.warning(f"{date_str}: VolumeSurgeRatioカラムなし")
+
+                logger.info(f"{date_str}: 最上位銘柄を選択 ({selection_reason})")
+
                 # 日付を datetime に変換
                 trade_date = datetime.strptime(date_str, '%Y%m%d')
 
-                # 各銘柄に対してシミュレーション
-                for idx, row in candidates_df.iterrows():
-                    code = str(row['Code'])
-                    name = row.get('Name', '')
+                # 選択した1銘柄のみシミュレーション
+                code = str(top_candidate['Code'])
+                name = top_candidate.get('Name', '')
 
-                    # 当日の株価データ取得
-                    ohlcv = self.get_daily_ohlcv(code, trade_date)
+                # 当日の株価データ取得
+                ohlcv = self.get_daily_ohlcv(code, trade_date)
 
-                    if ohlcv is None:
-                        logger.warning(f"{code} {name}: 株価データ取得失敗")
-                        continue
+                if ohlcv is None:
+                    logger.warning(f"{code} {name}: 株価データ取得失敗")
+                    continue
 
-                    # エントリー価格（始値）
-                    entry_price = ohlcv['Open']
+                # エントリー価格（始値）
+                entry_price = ohlcv['Open']
 
-                    if pd.isna(entry_price) or entry_price <= 0:
-                        logger.warning(f"{code} {name}: 始値データなし")
-                        continue
+                if pd.isna(entry_price) or entry_price <= 0:
+                    logger.warning(f"{code} {name}: 始値データなし")
+                    continue
 
-                    # トレードシミュレーション
-                    result = self.simulate_trade(code, entry_price, ohlcv)
+                # トレードシミュレーション
+                result = self.simulate_trade(code, entry_price, ohlcv)
 
-                    if result is None:
-                        continue
+                if result is None:
+                    continue
 
-                    # トレード記録
-                    trade_record = {
-                        'date': date_str,
-                        'code': code,
-                        'name': name,
-                        'entry_price': entry_price,
-                        'exit_price': result['exit_price'],
-                        'profit_loss': result['profit_loss'],
-                        'profit_loss_pct': result['profit_loss_pct'],
-                        'exit_reason': result['exit_reason']
-                    }
+                # トレード記録
+                trade_record = {
+                    'date': date_str,
+                    'code': code,
+                    'name': name,
+                    'entry_price': entry_price,
+                    'exit_price': result['exit_price'],
+                    'profit_loss': result['profit_loss'],
+                    'profit_loss_pct': result['profit_loss_pct'],
+                    'exit_reason': result['exit_reason']
+                }
 
-                    self.trades.append(trade_record)
+                self.trades.append(trade_record)
 
-                    logger.info(
-                        f"{code} {name}: "
-                        f"始値={entry_price:.0f}円 → {result['exit_reason']}={result['exit_price']:.0f}円 "
-                        f"({result['profit_loss_pct']:+.2f}%)"
-                    )
+                logger.info(
+                    f"✅ {code} {name}: "
+                    f"始値={entry_price:.0f}円 → {result['exit_reason']}={result['exit_price']:.0f}円 "
+                    f"({result['profit_loss_pct']:+.2f}%)"
+                )
 
             except Exception as e:
                 logger.error(f"{date_str}: シミュレーションエラー: {e}")
@@ -217,13 +252,13 @@ class PaperTradingSimulator:
             # 最初の行を返す（通常1銘柄1日分）
             row = df.iloc[0]
 
-            # カラム名をOHLCVに変換
+            # J-Quants APIのカラム名: O, H, L, C, Vo
             result = pd.Series({
-                'Open': row.get('Open'),
-                'High': row.get('High'),
-                'Low': row.get('Low'),
-                'Close': row.get('Close'),
-                'Volume': row.get('Volume')
+                'Open': row.get('O'),
+                'High': row.get('H'),
+                'Low': row.get('L'),
+                'Close': row.get('C'),
+                'Volume': row.get('Vo')
             })
 
             return result
