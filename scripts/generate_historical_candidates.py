@@ -58,16 +58,17 @@ def get_business_days(start_date, num_days=60):
     return business_days
 
 
-def generate_candidates_for_date(screener, date):
+def generate_candidates_for_date(screener, date, max_retries=3):
     """
-    指定日のcandidates CSVを生成
+    指定日のcandidates CSVを生成（429エラーリトライ対応）
 
     Args:
         screener: Screenerインスタンス
         date: 対象日（datetime）
+        max_retries: 429エラー時の最大リトライ回数
 
     Returns:
-        tuple: (success: bool, filepath: str)
+        tuple: (success: bool, filepath: str, skipped: bool)
     """
     date_str = date.strftime('%Y%m%d')
     output_path = f"data/candidates_{date_str}.csv"
@@ -75,35 +76,57 @@ def generate_candidates_for_date(screener, date):
     # 既存ファイルチェック
     if os.path.exists(output_path):
         logger.info(f"{date_str}: 既存ファイルをスキップ ({output_path})")
-        return True, output_path
+        return True, output_path, True  # skipped=True
 
-    try:
-        # 出来高急増銘柄を取得
-        candidates = screener.get_volume_surge_candidates(
-            surge_threshold=2.0,
-            lookback_days=20,
-            date=date
-        )
+    retry_count = 0
+    while retry_count <= max_retries:
+        try:
+            # 出来高急増銘柄を取得
+            candidates = screener.get_volume_surge_candidates(
+                surge_threshold=2.0,
+                lookback_days=20,
+                date=date
+            )
 
-        if len(candidates) == 0:
-            logger.warning(f"{date_str}: 候補銘柄なし")
-            return False, None
+            if len(candidates) == 0:
+                logger.warning(f"{date_str}: 候補銘柄なし")
+                return False, None, False
 
-        # 材料判定カラムを追加（全てTrueで固定、API節約）
-        candidates['has_material'] = True
-        candidates['material_strength'] = '中'  # デフォルト「中」
-        candidates['material_type'] = '出来高急増'
-        candidates['material_summary'] = f'{date_str} 出来高急増銘柄'
+            # 材料判定カラムを追加（全てTrueで固定、API節約）
+            candidates['has_material'] = True
+            candidates['material_strength'] = '中'  # デフォルト「中」
+            candidates['material_type'] = '出来高急増'
+            candidates['material_summary'] = f'{date_str} 出来高急増銘柄'
 
-        # CSV保存
-        screener.save_candidates(candidates, filepath=output_path)
-        logger.success(f"{date_str}: 保存完了 ({len(candidates)}銘柄)")
+            # CSV保存
+            screener.save_candidates(candidates, filepath=output_path)
+            logger.success(f"{date_str}: 保存完了 ({len(candidates)}銘柄)")
 
-        return True, output_path
+            return True, output_path, False
 
-    except Exception as e:
-        logger.error(f"{date_str}: エラー - {e}")
-        return False, None
+        except Exception as e:
+            error_msg = str(e)
+
+            # 429エラー（レート制限）の場合はリトライ
+            if '429' in error_msg or 'too many' in error_msg.lower():
+                retry_count += 1
+                if retry_count <= max_retries:
+                    wait_time = 30
+                    logger.warning(
+                        f"{date_str}: レート制限エラー（429）- "
+                        f"{wait_time}秒待機してリトライ ({retry_count}/{max_retries})"
+                    )
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"{date_str}: レート制限エラー - 最大リトライ回数超過")
+                    return False, None, False
+            else:
+                # 429以外のエラーはリトライせず終了
+                logger.error(f"{date_str}: エラー - {e}")
+                return False, None, False
+
+    return False, None, False
 
 
 def main():
@@ -129,27 +152,38 @@ def main():
     success_count = 0
     skip_count = 0
     error_count = 0
+    start_time = time.time()
 
     for i, date in enumerate(business_days, start=1):
-        logger.info(f"\n[{i}/{len(business_days)}] {date.strftime('%Y-%m-%d')} 処理中...")
+        # 進捗表示（残り時間推定）
+        if i > 1:
+            elapsed = time.time() - start_time
+            avg_time_per_day = elapsed / (i - 1)
+            remaining_days = len(business_days) - i + 1
+            estimated_remaining_minutes = (avg_time_per_day * remaining_days) / 60
+            progress_info = f" (残り約{estimated_remaining_minutes:.1f}分)"
+        else:
+            progress_info = ""
 
-        success, filepath = generate_candidates_for_date(screener, date)
+        logger.info(f"\n[{i}/{len(business_days)}] {date.strftime('%Y-%m-%d')} 処理中...{progress_info}")
+
+        success, filepath, skipped = generate_candidates_for_date(screener, date)
 
         if success:
-            if filepath and os.path.exists(filepath):
-                file_exists_before = True
-                success_count += 1
-            else:
+            if skipped:
                 skip_count += 1
+            else:
+                success_count += 1
         else:
             error_count += 1
 
-        # APIレート制限対策：2秒待機
+        # APIレート制限対策：3秒待機（60リクエスト/分 = 1リクエスト/秒、余裕を持って3秒）
         if i < len(business_days):
-            logger.debug("APIレート制限対策のため2秒待機...")
-            time.sleep(2)
+            logger.debug("APIレート制限対策のため3秒待機...")
+            time.sleep(3)
 
     # 結果サマリー
+    total_time = (time.time() - start_time) / 60
     logger.info("\n" + "=" * 60)
     logger.info("一括生成完了")
     logger.info("=" * 60)
@@ -157,6 +191,7 @@ def main():
     logger.info(f"スキップ（既存）: {skip_count}日")
     logger.info(f"エラー: {error_count}日")
     logger.info(f"合計: {len(business_days)}日")
+    logger.info(f"所要時間: {total_time:.1f}分")
     logger.info("=" * 60)
 
 
