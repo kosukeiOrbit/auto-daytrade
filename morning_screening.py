@@ -5,12 +5,23 @@ from datetime import datetime, timedelta
 from dateutil import tz
 from loguru import logger
 import jpholiday
+import os
 from src.screening import Screener
 from src.utils.market_sentiment import MarketSentiment
 from src.utils.material_judge import MaterialJudge
 from src.utils.tdnet_scraper import TDnetScraper
 from src.utils.news_scraper import NewsScraper
 from src.utils.notifier import DiscordNotifier
+
+# ログファイル設定（タスクスケジューラ実行時のログ保存用）
+os.makedirs("logs", exist_ok=True)
+logger.add(
+    "logs/morning_screening_{time:YYYY-MM-DD}.log",
+    rotation="1 day",
+    retention="30 days",
+    encoding="utf-8",
+    level="INFO"
+)
 
 
 def get_previous_business_day(date):
