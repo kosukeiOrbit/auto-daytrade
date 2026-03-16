@@ -56,18 +56,27 @@ class NewsScraper:
                 logger.warning(f"{code}: ニューステーブルが見つかりませんでした")
                 return ""
 
-            rows = news_table.find_all('tr')[:max_articles + 1]  # ヘッダー行+記事行
+            rows = news_table.find_all('tr')
+
+            # 除外カテゴリ（銘柄固有でない一般的なマーケット情報）
+            # テク: テクニカル分析（全市場）, 特集: マーケット特集, 注目: 注目銘柄ピックアップ, 市況: 市況コメント
+            exclude_categories = ['テク', '特集', '注目', '市況']
 
             news_texts = []
-            for row in rows[1:]:  # ヘッダー行をスキップ
+            for row in rows:
                 cells = row.find_all('td')
-                if len(cells) >= 2:
-                    # 1列目: 日付、2列目以降: カテゴリ・タイトル
+                if len(cells) >= 3:
+                    # 1列目: 日付、2列目: カテゴリ、3列目以降: タイトル
                     date_text = cells[0].get_text(strip=True)
+                    category_text = cells[1].get_text(strip=True)
+
+                    # 除外カテゴリをスキップ
+                    if category_text in exclude_categories:
+                        continue
 
                     # タイトルを含むセルを探す（aタグを含むセル）
                     title_text = ""
-                    for cell in cells[1:]:
+                    for cell in cells[2:]:
                         link = cell.find('a')
                         if link:
                             title_text = link.get_text(strip=True)
@@ -75,6 +84,10 @@ class NewsScraper:
 
                     if date_text and title_text:
                         news_texts.append(f"[{date_text}] {title_text}")
+
+                        # 最大記事数に達したら終了
+                        if len(news_texts) >= max_articles:
+                            break
 
             combined_text = "\n".join(news_texts)
 
