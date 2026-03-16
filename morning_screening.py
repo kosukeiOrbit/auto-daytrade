@@ -6,6 +6,7 @@ from dateutil import tz
 from loguru import logger
 import jpholiday
 import os
+import pandas as pd
 from src.screening import Screener
 from src.utils.market_sentiment import MarketSentiment
 from src.utils.material_judge import MaterialJudge
@@ -71,6 +72,16 @@ def main():
 
     if len(volume_candidates) == 0:
         logger.warning("出来高急増銘柄が見つかりませんでした")
+
+        # Discord通知（候補なし）
+        notifier = DiscordNotifier()
+        notifier.send_morning_report(
+            candidates_df=pd.DataFrame(),
+            judgments={},
+            sentiment=None,
+            tdnet_count=0
+        )
+
         logger.info("=" * 60)
         logger.info("朝スクリーニング終了（候補なし）")
         logger.info("=" * 60)
@@ -227,4 +238,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.error(f"朝スクリーニング実行エラー: {e}")
+        logger.exception("詳細なエラー情報:")
+
+        # Discord通知
+        try:
+            notifier = DiscordNotifier()
+            notifier.send_error(f"朝スクリーニング実行エラー: {str(e)[:100]}")
+        except:
+            pass  # 通知失敗しても続行
+
+        raise

@@ -180,11 +180,16 @@ class Screener:
         start_date = date - timedelta(days=lookback_days + 10)
 
         logger.info(f"\n[1/5] 株価データ取得中（{start_date.strftime('%Y-%m-%d')} 〜 {date.strftime('%Y-%m-%d')}）...")
-        df_prices = self.client.client.get_eq_bars_daily_range(
-            start_dt=start_date,
-            end_dt=date
-        )
-        logger.info(f"取得件数: {len(df_prices)}件")
+        try:
+            df_prices = self.client.client.get_eq_bars_daily_range(
+                start_dt=start_date,
+                end_dt=date
+            )
+            logger.info(f"取得件数: {len(df_prices)}件")
+        except Exception as e:
+            logger.error(f"株価データ取得エラー: {e}")
+            logger.error("API制限またはネットワークエラーの可能性があります")
+            return pd.DataFrame()
 
         # 日付を変換
         df_prices['Date'] = pd.to_datetime(df_prices['Date'])
