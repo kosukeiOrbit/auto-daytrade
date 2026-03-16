@@ -97,21 +97,22 @@ class JQuantsClient:
 
         Note:
             J-Quants API V2の /v2/fins/summary エンドポイントを使用
-            全銘柄のデータを取得するため、直近90日分を範囲取得
+            全銘柄のデータを取得するため、直近30日分を範囲取得
+            （各銘柄の最新1件のみ使用するため、30日で十分カバー可能）
 
         Returns:
             DataFrame: 財務情報データ
                 - Code: 銘柄コード
-                - NumberOfIssuedAndOutstandingSharesAtTheEndOfFiscalYearIncludingTreasuryStock: 期末発行済株式数
+                - ShOutFY: 期末発行済株式数
                 - その他財務情報
         """
         try:
-            logger.info("財務情報を取得中（直近90日分）...")
+            logger.info("財務情報を取得中（直近30日分）...")
 
-            # 直近90日分のデータを取得（全銘柄の最新財務情報を含めるため）
+            # 直近30日分のデータを取得（各銘柄の最新財務情報を含めるため）
             from datetime import datetime, timedelta
             end_dt = datetime.now(tz.gettz("Asia/Tokyo"))
-            start_dt = end_dt - timedelta(days=90)
+            start_dt = end_dt - timedelta(days=30)
 
             df = self.client.get_fin_summary_range(start_dt=start_dt, end_dt=end_dt)
             logger.success(f"財務情報を取得しました: {len(df)}件")
