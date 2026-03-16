@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(findstr:*)"
+      "Bash(Select-Object TaskName, State)",
+      "Bash(Format-List)",
+      "Bash(schtasks:*)",
+      "Bash(cmd /c \"schtasks /query /fo LIST\")",
+      "Bash(timeout:*)",
+      "Bash(./venv/Scripts/pip:*)"
     ],
     "deny": [],
     "ask": []

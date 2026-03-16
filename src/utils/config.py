@@ -17,6 +17,9 @@ class Config:
     # J-Quants API
     JQUANTS_API_KEY = os.getenv('JQUANTS_API_KEY')
 
+    # Alpha Vantage API
+    ALPHA_VANTAGE_API_KEY = os.getenv('ALPHA_VANTAGE_API_KEY')
+
     # Discord Webhook
     DISCORD_WEBHOOK_URL = os.getenv('DISCORD_WEBHOOK_URL')
 
