@@ -9,6 +9,7 @@ trade_executor.py のロジックを再現
 import os
 import glob
 import pandas as pd
+import time
 from datetime import datetime, timedelta
 from loguru import logger
 from src.utils.jquants_client import JQuantsClient
@@ -243,6 +244,9 @@ class PaperTradingSimulator:
             pd.Series: OHLCV or None
         """
         try:
+            # レート制限対策: 1.5秒待機（40リクエスト/分）
+            time.sleep(1.5)
+
             # J-Quants APIから当日の株価データを取得
             df = self.jquants.get_daily_quotes(code=code, date=date)
 

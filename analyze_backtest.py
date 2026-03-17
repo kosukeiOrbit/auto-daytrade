@@ -3,8 +3,8 @@ import sys
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-# CSVを読み込み
-df = pd.read_csv('backtest_results/paper_trading_20260317_215920.csv', encoding='utf-8-sig')
+# CSVを読み込み（新しい結果ファイル）
+df = pd.read_csv('backtest_results/paper_trading_20260317_223055.csv', encoding='utf-8-sig')
 
 print('=' * 70)
 print('詳細分析レポート')
@@ -50,12 +50,12 @@ profit_trades = df[df['exit_reason'] == '利確'].copy()
 profit_trades = profit_trades.sort_values('date')
 
 for i, (_, row) in enumerate(profit_trades.iterrows(), 1):
-    code = row['code']
-    name = row['name']
+    code = str(row['code'])
+    name = str(row['name'])
     entry = row['entry_price']
     exit_p = row['exit_price']
     pl = row['profit_loss']
-    date_str = row['date']
+    date_str = str(row['date'])
     print(f"{i:2d}. {date_str}: {code:5s} {name:20s} {entry:6.0f}円 → {exit_p:6.0f}円 (+{pl:.2f}円)")
 print()
 

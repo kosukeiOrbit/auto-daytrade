@@ -215,9 +215,9 @@ def main():
     jst = tz.gettz("Asia/Tokyo")
     now = datetime.now(jst)
 
-    # 過去60営業日を取得
+    # 過去240営業日を取得（約1年間）
     logger.info("営業日リストを生成中...")
-    business_days = get_business_days(now, num_days=60)
+    business_days = get_business_days(now, num_days=240)
     logger.info(f"対象期間: {business_days[0].strftime('%Y-%m-%d')} ～ {business_days[-1].strftime('%Y-%m-%d')}")
 
     # STEP 1: J-Quants APIクライアント初期化
@@ -233,11 +233,11 @@ def main():
 
     # STEP 2: 株価データを日付ごとに順次取得（レート制限対策）
     logger.info("\n" + "=" * 60)
-    logger.info("STEP 2: 株価データ取得（60営業日分、順次実行）")
+    logger.info("STEP 2: 株価データ取得（240営業日分、順次実行）")
     logger.info("=" * 60)
 
     logger.info(f"期間: {business_days[0].strftime('%Y-%m-%d')} ～ {business_days[-1].strftime('%Y-%m-%d')}")
-    logger.info("日付ごとに順次取得中... (60リクエスト、約60秒)")
+    logger.info("日付ごとに順次取得中... (240リクエスト、約4分)")
 
     df_all_list = []
 
