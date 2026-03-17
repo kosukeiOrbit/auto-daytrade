@@ -58,12 +58,13 @@ def get_business_days(start_date, num_days=60):
     return business_days
 
 
-def filter_volume_surge(df_day, listed_info, surge_threshold=2.0, lookback_days=20):
+def filter_volume_surge(df_day, df_all, listed_info, surge_threshold=2.0, lookback_days=20):
     """
     1日分のデータから出来高急増銘柄を抽出
 
     Args:
         df_day: その日の全銘柄株価データ
+        df_all: 全期間の株価データ（前日ボラティリティ計算用）
         listed_info: 上場銘柄情報
         surge_threshold: 出来高急増倍率閾値
         lookback_days: 平均出来高の計算期間
@@ -112,14 +113,71 @@ def filter_volume_surge(df_day, listed_info, surge_threshold=2.0, lookback_days=
         logger.info(f"出来高急増銘柄なし（閾値: {surge_threshold}x、最大: {max_ratio:.2f}x）")
         return pd.DataFrame()
 
+    # 英数字混在コード除外（253A0, 382A0等）
+    before_count = len(candidates)
+    candidates['CodeStr'] = candidates['Code'].astype(str)
+    candidates = candidates[candidates['CodeStr'].str.match(r'^\d+$')].copy()
+    alpha_excluded = before_count - len(candidates)
+    if alpha_excluded > 0:
+        logger.info(f"  英数字混在コード除外: {alpha_excluded}件（ETN・外国ETF）")
+    candidates = candidates.drop(columns=['CodeStr'])
+
+    if len(candidates) == 0:
+        logger.info("英数字混在コード除外後、候補なし")
+        return pd.DataFrame()
+
     # 上場銘柄情報とマージして銘柄名を追加
     if listed_info is not None:
         listed_info_subset = listed_info[['Code', 'CoName', 'Mkt']].copy()
         candidates = candidates.merge(listed_info_subset, on='Code', how='left')
         candidates.rename(columns={'CoName': 'Name', 'Mkt': 'MarketCode'}, inplace=True)
+
+        # ETF・債券系キーワード除外
+        before_count = len(candidates)
+        etf_keywords = [
+            'ETF', 'ＥＴＦ', 'REIT', 'インデックス', '上場投資',
+            '国債', 'TOPIX', 'Nikkei', '日経', 'インフラファンド',
+            'ブラックロック', 'iシェアーズ', 'アセットマネジメント',
+            '投資信託', 'ファンド', 'グローバルX', 'WisdomTree'
+        ]
+        mask_etf = candidates['Name'].fillna('').str.contains('|'.join(etf_keywords), case=False, regex=True)
+        candidates = candidates[~mask_etf].copy()
+        name_excluded = before_count - len(candidates)
+        if name_excluded > 0:
+            logger.info(f"  ETF・債券系除外: {name_excluded}件（銘柄名キーワード）")
     else:
         candidates['Name'] = ''
         candidates['MarketCode'] = ''
+
+    if len(candidates) == 0:
+        logger.info("ETF除外後、候補なし")
+        return pd.DataFrame()
+
+    # ボラティリティフィルタ（前日の日中値幅1.5%以上）
+    target_date = df_day['Date'].iloc[0]
+    df_all_sorted = df_all.sort_values(['Code', 'Date'])
+    df_all_sorted['IntradayRange'] = ((df_all_sorted['H'] - df_all_sorted['L']) / df_all_sorted['O'] * 100)
+
+    # 前日のデータを取得
+    df_prev = df_all_sorted[df_all_sorted['Date'] < target_date].groupby('Code').tail(1)
+    df_prev_volatility = df_prev[['Code', 'IntradayRange']].copy()
+    df_prev_volatility = df_prev_volatility.rename(columns={'IntradayRange': 'PrevIntradayRange'})
+
+    # マージ
+    candidates = candidates.merge(df_prev_volatility, on='Code', how='left')
+
+    # 前日値幅1.5%未満を除外
+    before_count = len(candidates)
+    candidates = candidates[candidates['PrevIntradayRange'] >= 1.5].copy()
+    volatility_excluded = before_count - len(candidates)
+    if volatility_excluded > 0:
+        logger.info(f"  低ボラ除外: {volatility_excluded}件（前日値幅1.5%未満）")
+
+    candidates = candidates.drop(columns=['PrevIntradayRange'], errors='ignore')
+
+    if len(candidates) == 0:
+        logger.info("ボラティリティフィルタ後、候補なし")
+        return pd.DataFrame()
 
     # カラム名を統一
     rename_dict = {
@@ -282,6 +340,7 @@ def main():
             # 出来高急増銘柄を抽出（閾値: 2.0倍 = 20日平均の2.0倍以上）
             candidates = filter_volume_surge(
                 df_day,
+                df_all,  # 全期間データ（前日ボラティリティ計算用）
                 listed_info,
                 surge_threshold=2.0,
                 lookback_days=20

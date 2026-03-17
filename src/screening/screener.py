@@ -257,19 +257,34 @@ class Screener:
         # ETF等は末尾が0以外、または先頭4桁が範囲外（例: 48900, 17760）
         logger.info(f"\n[4/7] 4桁コードフィルタ（通常株式のみ）...")
 
+        # Codeを文字列として扱い、英数字混在コードを除外
+        df_filtered['CodeStr'] = df_filtered['Code'].astype(str)
+        before_count = len(df_filtered)
+
+        # 英数字混在コード（例: 253A0, 382A0）を除外
+        df_filtered = df_filtered[df_filtered['CodeStr'].str.match(r'^\d+$')].copy()
+        alpha_excluded = before_count - len(df_filtered)
+        if alpha_excluded > 0:
+            logger.info(f"  英数字混在コード除外: {alpha_excluded}件（ETN・外国ETF等）")
+
         # Codeを数値に変換
         df_filtered['CodeNum'] = pd.to_numeric(df_filtered['Code'], errors='coerce')
 
         # フィルタ条件: 末尾が0 かつ 先頭4桁が1000-9999
+        before_count = len(df_filtered)
         df_filtered = df_filtered[
             (df_filtered['CodeNum'] % 10 == 0) &           # 末尾が0
             (df_filtered['CodeNum'] // 10 >= 1000) &       # 先頭4桁が1000以上
             (df_filtered['CodeNum'] // 10 <= 9999)         # 先頭4桁が9999以下
         ].copy()
 
+        five_digit_excluded = before_count - len(df_filtered)
+        if five_digit_excluded > 0:
+            logger.info(f"  5桁コード除外: {five_digit_excluded}件（ETF・REIT等）")
+
         # 4桁コードに変換（表示用）
         df_filtered['Code4'] = (df_filtered['CodeNum'] // 10).astype(int)
-        df_filtered = df_filtered.drop(columns=['CodeNum'])
+        df_filtered = df_filtered.drop(columns=['CodeNum', 'CodeStr'])
 
         logger.info(f"4桁コード銘柄: {len(df_filtered)}件")
 
@@ -277,7 +292,7 @@ class Screener:
             logger.warning("4桁コード銘柄が見つかりませんでした")
             return pd.DataFrame()
 
-        # 4.5. MktNmでETF・ETN・REIT除外（「その他」市場を除外）
+        # 4.5. MktNm + 銘柄名でETF・ETN・REIT除外
         if self.listed_info is not None:
             logger.info(f"\n[4.5/7] ETF・ETN・REIT除外フィルタ...")
 
@@ -286,9 +301,9 @@ class Screener:
             listed_info_4digit = self.listed_info.copy()
             listed_info_4digit['Code4'] = (pd.to_numeric(listed_info_4digit['Code'], errors='coerce') // 10).astype('Int64')
 
-            # Code4でマージ（MktNmを取得）
+            # Code4でマージ（MktNm と CoName（銘柄名）を取得）
             df_filtered = df_filtered.merge(
-                listed_info_4digit[['Code4', 'MktNm']],
+                listed_info_4digit[['Code4', 'MktNm', 'CoName']],
                 on='Code4',
                 how='left'
             )
@@ -306,16 +321,68 @@ class Screener:
             ].copy()
 
             excluded_count = before_count - len(df_filtered)
-            logger.info(f"  ETF・ETN・REIT除外: {excluded_count}件除外, {len(df_filtered)}件残存")
+            logger.info(f"  市場区分除外: {excluded_count}件除外（「その他」市場）")
 
-            # MktNmカラムを削除（不要なため）
-            df_filtered = df_filtered.drop(columns=['MktNm'], errors='ignore')
+            # 銘柄名でETF・債券系を除外
+            before_count = len(df_filtered)
+            etf_keywords = [
+                'ETF', 'ＥＴＦ', 'REIT', 'インデックス', '上場投資',
+                '国債', 'TOPIX', 'Nikkei', '日経', 'インフラファンド',
+                'ブラックロック', 'iシェアーズ', 'アセットマネジメント',
+                '投資信託', 'ファンド', 'グローバルX', 'WisdomTree'
+            ]
+
+            # CoName（銘柄名）にキーワードが含まれる銘柄を除外
+            mask_etf = df_filtered['CoName'].fillna('').str.contains('|'.join(etf_keywords), case=False, regex=True)
+            df_filtered = df_filtered[~mask_etf].copy()
+
+            name_excluded = before_count - len(df_filtered)
+            if name_excluded > 0:
+                logger.info(f"  銘柄名除外: {name_excluded}件除外（ETF・債券系キーワード検出）")
+
+            logger.info(f"  除外後残存: {len(df_filtered)}件")
+
+            # CoNameカラムを削除（不要なため）、MktNmも削除
+            df_filtered = df_filtered.drop(columns=['MktNm', 'CoName'], errors='ignore')
 
             if len(df_filtered) == 0:
                 logger.warning("ETF・ETN・REIT除外後、候補銘柄がなくなりました")
                 return pd.DataFrame()
         else:
             logger.warning(f"\n[4.5/7] 上場銘柄情報が取得できていないため、ETF・ETN・REIT除外をスキップ")
+
+        # 4.6. ボラティリティフィルタ（前日の日中値幅1.5%以上）
+        logger.info(f"\n[4.6/7] ボラティリティフィルタ（前日の日中値幅1.5%以上）...")
+
+        # 前日の日中値幅を計算（High - Low) / Open
+        df_prices = df_prices.sort_values(['Code', 'Date'])
+        df_prices['IntradayRange'] = ((df_prices['H'] - df_prices['L']) / df_prices['O'] * 100)
+
+        # 前日のIntradayRangeを取得（Code4でマージ）
+        # 対象日の1日前のデータを取得
+        df_prev_day = df_prices[df_prices['Date'] < target_date_str].copy()
+        df_prev_day = df_prev_day.sort_values(['Code', 'Date']).groupby('Code').tail(1)
+        df_prev_day['Code4'] = (pd.to_numeric(df_prev_day['Code'], errors='coerce') // 10).astype('Int64')
+        df_prev_volatility = df_prev_day[['Code4', 'IntradayRange']].copy()
+        df_prev_volatility = df_prev_volatility.rename(columns={'IntradayRange': 'PrevIntradayRange'})
+
+        # マージ
+        df_filtered = df_filtered.merge(df_prev_volatility, on='Code4', how='left')
+
+        # ボラティリティ1.5%未満を除外
+        before_count = len(df_filtered)
+        df_filtered = df_filtered[df_filtered['PrevIntradayRange'] >= 1.5].copy()
+        excluded_count = before_count - len(df_filtered)
+        if excluded_count > 0:
+            logger.info(f"  除外: {excluded_count}件（前日値幅1.5%未満の低ボラ銘柄）")
+        logger.info(f"  残存: {len(df_filtered)}件")
+
+        # PrevIntradayRangeカラムを削除（不要）
+        df_filtered = df_filtered.drop(columns=['PrevIntradayRange'], errors='ignore')
+
+        if len(df_filtered) == 0:
+            logger.warning("ボラティリティフィルタ後、候補銘柄がなくなりました")
+            return pd.DataFrame()
 
         # MA25は参考値として計算するが、フィルタには使用しない
         logger.info(f"\n25日移動平均を計算中（参考値）...")

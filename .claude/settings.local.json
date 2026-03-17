@@ -1,15 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(Select-Object TaskName, State)",
-      "Bash(Format-List)",
-      "Bash(schtasks:*)",
-      "Bash(cmd /c \"schtasks /query /fo LIST\")",
-      "Bash(timeout:*)",
-      "Bash(./venv/Scripts/pip:*)",
-      "Bash(.venvScriptspython.exe test_kabu_api.py)",
-      "Bash(.\\venv\\Scripts\\python.exe:*)",
-      "Bash(iconv:*)"
+      "Bash(Sort-Object LastWriteTime -Descending)",
+      "Bash(Select-Object -First 1)",
+      "Bash(ForEach-Object { Get-Content $_ullName -Tail 100)",
+      "Bash(Select-String -Pattern \"保存完了|成功:|エラー:|候補銘柄なし|一括生成完了\" })",
+      "Bash(Select-String -Pattern \"候補銘柄|既存ファイル|保存完了\" -Context 1)",
+      "Bash(Select-Object -First 20)"
     ],
     "deny": [],
     "ask": []
