@@ -72,7 +72,7 @@ def filter_volume_surge(df_day, listed_info, surge_threshold=2.0, lookback_days=
         DataFrame: 出来高急増銘柄リスト
     """
     # 必要なカラムが揃っているか確認
-    required_cols = ['Code', 'Date', 'O', 'H', 'L', 'C', 'Vo', 'Vwap']
+    required_cols = ['Code', 'Date', 'O', 'H', 'L', 'C', 'Vo']
     if not all(col in df_day.columns for col in required_cols):
         logger.warning(f"必要なカラムが不足しています: {df_day.columns.tolist()}")
         return pd.DataFrame()
@@ -80,35 +80,59 @@ def filter_volume_surge(df_day, listed_info, surge_threshold=2.0, lookback_days=
     # 当日の出来高データ
     df_day = df_day.copy()
     df_day['Volume'] = df_day['Vo']
-    df_day['VolumeAvg'] = df_day.get('VolAve', df_day['Vo'])  # 平均出来高（APIから取得できる場合）
+
+    # VolAveカラムが存在しない、またはNaNの場合はフィルタリングできない
+    if 'VolAve' not in df_day.columns:
+        logger.warning("VolAveカラムが存在しません。20日移動平均が事前計算されていない可能性があります。")
+        return pd.DataFrame()
+
+    # VolAveがNaNでない銘柄のみを対象とする（20日分のデータがある銘柄）
+    total_stocks = len(df_day)
+    df_day = df_day[df_day['VolAve'].notna()].copy()
+    valid_stocks = len(df_day)
+
+    if len(df_day) == 0:
+        logger.info(f"20日移動平均が計算できた銘柄がありません（全{total_stocks}銘柄中、有効データ0件）")
+        return pd.DataFrame()
+
+    logger.info(f"20日移動平均あり: {valid_stocks}/{total_stocks}銘柄")
 
     # 出来高急増倍率計算
-    df_day['VolumeSurgeRatio'] = df_day['Volume'] / df_day['VolumeAvg'].replace(0, 1)
+    df_day['VolumeSurgeRatio'] = df_day['Volume'] / df_day['VolAve'].replace(0, 1)
+
+    # デバッグ: 急増倍率の分布を確認
+    ratio_stats = df_day['VolumeSurgeRatio'].describe()
+    max_ratio = df_day['VolumeSurgeRatio'].max()
+    logger.info(f"VolumeSurgeRatio 最大値: {max_ratio:.2f}x, 平均: {ratio_stats['mean']:.2f}x")
 
     # 出来高急増銘柄をフィルタ
     candidates = df_day[df_day['VolumeSurgeRatio'] >= surge_threshold].copy()
 
     if len(candidates) == 0:
+        logger.info(f"出来高急増銘柄なし（閾値: {surge_threshold}x、最大: {max_ratio:.2f}x）")
         return pd.DataFrame()
 
     # 上場銘柄情報とマージして銘柄名を追加
     if listed_info is not None:
-        listed_info_subset = listed_info[['Code', 'CompanyName', 'MarketCode']].copy()
+        listed_info_subset = listed_info[['Code', 'CoName', 'Mkt']].copy()
         candidates = candidates.merge(listed_info_subset, on='Code', how='left')
-        candidates.rename(columns={'CompanyName': 'Name'}, inplace=True)
+        candidates.rename(columns={'CoName': 'Name', 'Mkt': 'MarketCode'}, inplace=True)
     else:
         candidates['Name'] = ''
         candidates['MarketCode'] = ''
 
     # カラム名を統一
-    candidates.rename(columns={
+    rename_dict = {
         'O': 'Open',
         'H': 'High',
         'L': 'Low',
         'C': 'Close',
-        'Vo': 'Volume',
-        'Vwap': 'VWAP'
-    }, inplace=True)
+        'Vo': 'Volume'
+    }
+    # Vaカラムがあれば VWAPにリネーム
+    if 'Va' in candidates.columns:
+        rename_dict['Va'] = 'VWAP'
+    candidates.rename(columns=rename_dict, inplace=True)
 
     # 出来高急増倍率でソート（降順）
     candidates = candidates.sort_values('VolumeSurgeRatio', ascending=False)
@@ -191,17 +215,35 @@ def main():
     df_all = pd.concat(df_all_list, ignore_index=True)
     logger.success(f"株価データ取得完了: {len(df_all):,}行 ({len(df_all_list)}日分)")
 
-    # STEP 3: メモリ上で日付ごとに分割してCSV生成
-    logger.info("\n" + "=" * 60)
-    logger.info("STEP 3: 日付ごとにスクリーニング実行")
-    logger.info("=" * 60)
-
     # 日付カラムをdatetime型に変換（時刻部分を正規化: 00:00:00）
     if 'Date' in df_all.columns:
         df_all['Date'] = pd.to_datetime(df_all['Date']).dt.normalize()
     else:
         logger.error("Dateカラムが見つかりません")
         return
+
+    # STEP 2.5: 20日移動平均出来高を事前計算
+    logger.info("\n" + "=" * 60)
+    logger.info("STEP 2.5: 20日移動平均出来高を計算")
+    logger.info("=" * 60)
+
+    # CodeとDateでソート（移動平均計算のため）
+    df_all = df_all.sort_values(['Code', 'Date']).reset_index(drop=True)
+
+    # 銘柄ごとに20日移動平均出来高を計算（min_periods=10で柔軟に）
+    logger.info("銘柄ごとの20日移動平均を計算中...")
+    df_all['VolAve'] = df_all.groupby('Code')['Vo'].transform(
+        lambda x: x.rolling(window=20, min_periods=10).mean()
+    )
+
+    # 計算結果をログ出力
+    valid_avg_count = df_all['VolAve'].notna().sum()
+    logger.success(f"20日移動平均計算完了: {valid_avg_count:,}行（有効データ）")
+
+    # STEP 3: メモリ上で日付ごとに分割してCSV生成
+    logger.info("\n" + "=" * 60)
+    logger.info("STEP 3: 日付ごとにスクリーニング実行")
+    logger.info("=" * 60)
 
     success_count = 0
     skip_count = 0
@@ -230,7 +272,14 @@ def main():
 
             logger.info(f"  → {len(df_day)}銘柄のデータを取得")
 
-            # 出来高急増銘柄を抽出
+            # デバッグ: VolAveカラムの有無と内容を確認
+            if 'VolAve' in df_day.columns:
+                vol_ave_valid = df_day['VolAve'].notna().sum()
+                logger.info(f"  VolAveカラム: あり、有効データ={vol_ave_valid}/{len(df_day)}")
+            else:
+                logger.warning(f"  VolAveカラム: なし")
+
+            # 出来高急増銘柄を抽出（閾値: 2.0倍 = 20日平均の2.0倍以上）
             candidates = filter_volume_surge(
                 df_day,
                 listed_info,
