@@ -90,27 +90,18 @@ class TradeExecutor:
             if filtered_count > 0:
                 logger.info(f"フィルタ1 (材料強度): {filtered_count}件除外 (残り{len(candidates_df)}件)")
 
-        # フィルタ2: 超低位株除外（100円未満）
-        price_col = 'Close' if 'Close' in candidates_df.columns else 'C' if 'C' in candidates_df.columns else None
-        if price_col:
-            before_count = len(candidates_df)
-            candidates_df = candidates_df[candidates_df[price_col] >= 100]
-            filtered_count = before_count - len(candidates_df)
-            if filtered_count > 0:
-                logger.info(f"フィルタ2 (100円未満除外): {filtered_count}件除外 (残り{len(candidates_df)}件)")
-
-        # フィルタ3: 前日ストップ高除外（前日終値が前々日比+25%以上）
+        # フィルタ2: 前日ストップ高除外（前日終値が前々日比+25%以上）
         if 'Code' in candidates_df.columns:
             filtered_codes = []
             for idx, row in candidates_df.iterrows():
                 code = str(row['Code'])
                 if self.is_previous_day_limit_up(code, trade_date):
                     filtered_codes.append(code)
-                    logger.info(f"フィルタ3 (前日ストップ高): {code} を除外")
+                    logger.info(f"フィルタ2 (前日ストップ高): {code} を除外")
 
             if len(filtered_codes) > 0:
                 candidates_df = candidates_df[~candidates_df['Code'].astype(str).isin(filtered_codes)]
-                logger.info(f"フィルタ3 (前日ストップ高除外): {len(filtered_codes)}件除外 (残り{len(candidates_df)}件)")
+                logger.info(f"フィルタ2 (前日ストップ高除外): {len(filtered_codes)}件除外 (残り{len(candidates_df)}件)")
 
         logger.info(f"フィルタ適用後: {len(candidates_df)}件 (除外: {initial_count - len(candidates_df)}件)")
         return candidates_df
