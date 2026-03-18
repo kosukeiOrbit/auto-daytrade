@@ -215,8 +215,12 @@ class KabuClient:
 
             # order_typeをAPIのFrontOrderTypeに変換
             # 1=成行 → 10, 2=指値 → 20, 3=逆指値 → 30
-            front_order_type_map = {1: 10, 2: 20, 3: 30}
-            front_order_type = front_order_type_map.get(order_type, 10)
+            # order_type >= 10 の場合はそのまま使用（直接FrontOrderType指定）
+            if order_type >= 10:
+                front_order_type = order_type
+            else:
+                front_order_type_map = {1: 10, 2: 20, 3: 30}
+                front_order_type = front_order_type_map.get(order_type, 10)
 
             # 注文リクエストボディ
             order_data = {

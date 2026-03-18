@@ -1,12 +1,12 @@
 """
 自動売買実行スクリプト
-タスクスケジューラから9:00に起動され、候補銘柄CSVを読み込んでエントリー注文を実行する
+タスクスケジューラから8:45に起動され、候補銘柄CSVを読み込んでエントリー注文を実行する
 
 【タスクスケジューラ登録手順】
 1. タスクスケジューラを開く
 2. 「基本タスクの作成」を選択
-3. 名前: "DayTrade Auto Trading 9:00"
-4. トリガー: 毎日 9:00
+3. 名前: "DayTrade Auto Trading 8:45"
+4. トリガー: 毎日 8:45
 5. 操作: プログラムの開始
 6. プログラム/スクリプト: C:\work\git\auto-daytrade\venv\Scripts\python.exe
 7. 引数の追加: auto_trading.py
@@ -17,8 +17,10 @@
 1. kabuステーション起動確認（API疎通チェック）
 2. candidates_YYYYMMDD.csv の読み込み（当日分）
 3. 候補がなければDiscord通知して終了
-4. execute_daily_trading() を実行してエントリー
-5. 15:30に自動終了
+4. execute_daily_trading() を実行してエントリー（寄成・前場注文）
+5. 11:30 前場引け含み損決済
+6. 15:20 大引け前全ポジション決済
+7. 15:30に自動終了
 """
 import os
 import sys

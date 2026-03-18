@@ -284,14 +284,14 @@ class TradeExecutor:
                 logger.warning(f"{symbol}: ポジションサイズが0のためスキップ")
                 return None
 
-            # エントリー（成行買い）
-            logger.info(f"{symbol}: エントリー注文 {qty}株 @ 成行")
+            # エントリー（寄成・前場買い）
+            logger.info(f"{symbol}: エントリー注文 {qty}株 @ 寄成（前場）")
             entry_result = self.kabu_client.send_order(
                 symbol=symbol,
                 exchange=exchange,
                 side=2,  # 2=買
                 qty=qty,
-                order_type=1,  # 1=成行
+                order_type=13,  # 13=寄成・前場（FrontOrderType直接指定）
                 price=0
             )
 
