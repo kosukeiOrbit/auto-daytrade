@@ -427,6 +427,45 @@ class Screener:
             logger.warning("ボラティリティフィルタ後、候補銘柄がなくなりました")
             return pd.DataFrame()
 
+        # 4.7. 前日急騰フィルタ（前日終値が前々日比+5%以上の銘柄を除外）
+        logger.info(f"\n[4.7/7] 前日急騰フィルタ（前日終値が前々日比+5%以上を除外）...")
+
+        # 前日・前々日の終値を取得
+        df_prev_2days = df_prices[df_prices['Date'] < target_date_str].copy()
+        df_prev_2days = df_prev_2days.sort_values(['Code', 'Date'])
+        # 各銘柄の直近2日分を取得
+        df_prev_2days = df_prev_2days.groupby('Code').tail(2)
+        # 前日終値と前々日終値を計算
+        df_prev_2days['PrevClose'] = df_prev_2days.groupby('Code')['C'].shift(1)
+        df_prev_2days['PrevDayChangePct'] = (
+            (df_prev_2days['C'] - df_prev_2days['PrevClose']) / df_prev_2days['PrevClose'] * 100
+        )
+        # 前日（直近1日目）のデータのみ抽出
+        df_prev_change = df_prev_2days.groupby('Code').tail(1)[['Code', 'PrevDayChangePct']].copy()
+        df_prev_change['Code4'] = (pd.to_numeric(df_prev_change['Code'], errors='coerce') // 10).astype('Int64')
+        df_prev_change = df_prev_change[['Code4', 'PrevDayChangePct']]
+
+        # マージ
+        df_filtered = df_filtered.merge(df_prev_change, on='Code4', how='left')
+
+        before_count = len(df_filtered)
+        # 前日+5%以上の銘柄を除外（個別ログ出力）
+        surge_mask = df_filtered['PrevDayChangePct'] >= 5.0
+        for _, row in df_filtered[surge_mask].iterrows():
+            logger.info(f"  {row['Code4']}: 前日急騰除外 (+{row['PrevDayChangePct']:.1f}%) → スキップ")
+        df_filtered = df_filtered[~surge_mask].copy()
+        excluded_count = before_count - len(df_filtered)
+        if excluded_count > 0:
+            logger.info(f"  除外: {excluded_count}件（前日+5%以上の急騰銘柄）")
+        logger.info(f"  前日急騰除外後: {len(df_filtered)}銘柄")
+
+        # PrevDayChangePctカラムを削除（不要）
+        df_filtered = df_filtered.drop(columns=['PrevDayChangePct'], errors='ignore')
+
+        if len(df_filtered) == 0:
+            logger.warning("前日急騰フィルタ後、候補銘柄がなくなりました")
+            return pd.DataFrame()
+
         # MA25は参考値として計算するが、フィルタには使用しない
         logger.info(f"\n25日移動平均を計算中（参考値）...")
         df_prices['MA25'] = df_prices.groupby('Code')['C'].transform(
