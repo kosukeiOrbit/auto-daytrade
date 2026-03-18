@@ -79,9 +79,19 @@ class NewsScraper:
         if reference_date is None:
             reference_date = datetime.now(jst)
 
-        # 直前の営業日15:30を基準時刻とする
-        prev_business_day = self._get_previous_business_day(reference_date)
-        cutoff_time = prev_business_day.replace(hour=15, minute=30, second=0, microsecond=0, tzinfo=jst)
+        # 前営業日15:30を基準時刻とする
+        # ただし、実行日が営業日の場合は前々営業日15:30まで遡る
+        # 例: 3/18(火)実行 → 3/17(月)が前営業日 → 3/16(金)15:30以降を採用
+        #     3/18(火)実行 → 3/17(月)15:30ではなく、3/16(金)15:30以降
+
+        # 前営業日を取得
+        prev_business_day_1 = self._get_previous_business_day(reference_date)
+
+        # さらに1営業日前を取得（引け後開示は前営業日15:30以降）
+        prev_business_day_2 = self._get_previous_business_day(prev_business_day_1)
+
+        # カットオフ時刻: 前々営業日の15:30
+        cutoff_time = prev_business_day_2.replace(hour=15, minute=30, second=0, microsecond=0, tzinfo=jst)
 
         # ニュース日時がカットオフ時刻以降なら採用
         return news_date >= cutoff_time
