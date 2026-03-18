@@ -98,26 +98,54 @@ def check_candidates_exist():
     return exists, csv_path
 
 
-def wait_until_end_of_day():
+def trading_loop(executor):
     """
-    15:30まで待機してから終了
+    取引時間中の監視ループ
+
+    - 11:25-11:35: 含み損ポジション強制決済
+    - 15:15-15:25: 全ポジション強制決済
+    - 15:30: ループ終了
+
+    Args:
+        executor: TradeExecutor インスタンス
     """
-    now = datetime.now()
-    end_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    logger.info("=" * 60)
+    logger.info("取引監視ループ開始")
+    logger.info("=" * 60)
 
-    # すでに15:30を過ぎている場合は即座に終了
-    if now >= end_time:
-        logger.info("すでに15:30を過ぎているため、即座に終了します")
-        return
+    midday_exit_done = False
+    eod_exit_done = False
 
-    wait_seconds = (end_time - now).total_seconds()
-    logger.info(f"15:30まで待機します（{wait_seconds:.0f}秒 = {wait_seconds/60:.1f}分）")
+    while True:
+        now = datetime.now()
+        current_hour = now.hour
+        current_minute = now.minute
 
-    try:
-        time.sleep(wait_seconds)
-        logger.info("15:30到達。自動売買スクリプトを終了します")
-    except KeyboardInterrupt:
-        logger.warning("待機中に手動終了されました")
+        # 15:30到達で終了
+        if current_hour >= 15 and current_minute >= 30:
+            logger.info("15:30到達。取引監視ループを終了します")
+            break
+
+        # 11:25-11:35: 前場引け含み損決済
+        if not midday_exit_done and current_hour == 11 and 25 <= current_minute <= 35:
+            logger.info(f"[{now.strftime('%H:%M:%S')}] 前場引け時刻 → 含み損決済実行")
+            try:
+                executor.force_exit_losing_positions_midday()
+                midday_exit_done = True
+            except Exception as e:
+                logger.error(f"前場引け決済エラー: {e}")
+
+        # 15:15-15:25: 大引け前全決済
+        if not eod_exit_done and current_hour == 15 and 15 <= current_minute <= 25:
+            logger.info(f"[{now.strftime('%H:%M:%S')}] 大引け前 → 全ポジション決済実行")
+            try:
+                executor.force_exit_all_positions_eod()
+                eod_exit_done = True
+            except Exception as e:
+                logger.error(f"大引け前決済エラー: {e}")
+
+        # 1分待機
+        time.sleep(60)
 
 
 def main():
@@ -178,9 +206,9 @@ def main():
         budget = 800_000
         logger.warning(f"買付余力取得エラー、固定予算を使用: {e}")
 
-    # STEP 4: 自動売買実行
+    # STEP 4: TradeExecutor初期化
     logger.info("=" * 60)
-    logger.info("自動売買実行開始")
+    logger.info("TradeExecutor初期化")
     logger.info("=" * 60)
 
     try:
@@ -192,19 +220,23 @@ def main():
             max_consecutive_losses=3
         )
 
-        # 日次自動売買実行
+        # STEP 5: エントリー実行
+        logger.info("=" * 60)
+        logger.info("エントリー実行")
+        logger.info("=" * 60)
+
         executor.execute_daily_trading()
 
-        logger.success("自動売買実行完了")
+        logger.success("エントリー実行完了")
+
+        # STEP 6: 取引監視ループ（11:30含み損決済、15:20全決済）
+        trading_loop(executor)
 
     except Exception as e:
         error_msg = f"自動売買実行エラー: {e}"
         logger.error(error_msg)
         notifier.send_error(error_msg)
         sys.exit(1)
-
-    # STEP 5: 15:30まで待機
-    wait_until_end_of_day()
 
     logger.info("=" * 60)
     logger.info("自動売買スクリプト正常終了")

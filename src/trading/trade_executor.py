@@ -371,11 +371,11 @@ class TradeExecutor:
 
     def execute_daily_trading(self):
         """
-        日次自動売買実行
-        候補銘柄CSVを読み込み、エントリー判定・注文実行
+        日次自動売買実行（1日1銘柄集中）
+        候補銘柄CSVを読み込み、最優先銘柄にエントリー
         """
         logger.info("=" * 60)
-        logger.info("日次自動売買開始")
+        logger.info("日次自動売買開始（1日1銘柄集中）")
         logger.info("=" * 60)
 
         # 安全装置チェック
@@ -402,16 +402,37 @@ class TradeExecutor:
             logger.info("フィルタ後の候補銘柄がありません")
             return
 
-        # 各候補銘柄に対してエントリー判定
+        # 優先順位でソート
+        # 1. material_strength: '強' > '中'
+        # 2. 同一強度内では VolumeSurgeRatio 降順
+        strength_order = {'強': 0, '中': 1}
+        candidates_df['strength_rank'] = candidates_df['material_strength'].map(strength_order)
+        candidates_df = candidates_df.sort_values(
+            by=['strength_rank', 'VolumeSurgeRatio'],
+            ascending=[True, False]
+        )
+        candidates_df = candidates_df.drop(columns=['strength_rank'])
+
+        logger.info("優先順位ソート完了:")
+        for idx, row in candidates_df.head(5).iterrows():
+            logger.info(f"  {idx+1}. {row['Code']}: {row['material_strength']} 出来高{row['VolumeSurgeRatio']:.2f}倍")
+
+        # 1日1銘柄エントリー（最優先銘柄のみ）
         entry_count = 0
         for idx, row in candidates_df.iterrows():
             symbol = str(row['Code'])
 
-            logger.info(f"\n[{idx+1}/{len(candidates_df)}] {symbol}")
+            # 10:30以降はエントリーしない
+            now = datetime.now()
+            if now.time() > datetime.strptime("10:30", "%H:%M").time():
+                logger.info("エントリー期限（10:30）を過ぎたためスキップ")
+                break
+
+            logger.info(f"\n[エントリー候補] {symbol} ({row['material_strength']}, 出来高{row['VolumeSurgeRatio']:.2f}倍)")
 
             # エントリーシグナルチェック
             if not self.check_entry_signal(symbol):
-                logger.info(f"{symbol}: エントリー条件不適合")
+                logger.info(f"{symbol}: エントリー条件不適合 → 次の候補へ")
                 continue
 
             # エントリー実行
@@ -419,9 +440,10 @@ class TradeExecutor:
 
             if position:
                 entry_count += 1
-                logger.success(f"{symbol}: エントリー成功")
+                logger.success(f"{symbol}: エントリー成功 → 1日1銘柄ルールにより終了")
+                break  # 1銘柄エントリーしたら終了
             else:
-                logger.warning(f"{symbol}: エントリー失敗")
+                logger.warning(f"{symbol}: エントリー失敗 → 次の候補へ")
 
         logger.info("=" * 60)
         logger.info(f"日次自動売買完了: エントリー {entry_count}銘柄")
