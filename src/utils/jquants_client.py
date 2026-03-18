@@ -6,16 +6,24 @@ from datetime import datetime
 from dateutil import tz
 from loguru import logger
 from .config import Config
+from .cache_manager import CacheManager
 
 
 class JQuantsClient:
     """J-Quants API クライアントのラッパー"""
 
-    def __init__(self):
-        """初期化"""
+    def __init__(self, use_cache=True):
+        """
+        初期化
+
+        Args:
+            use_cache: キャッシュを使用するか (デフォルト: True)
+        """
         Config.validate()
         self.client = jquantsapi.ClientV2(api_key=Config.JQUANTS_API_KEY)
-        logger.info("J-Quants API クライアントを初期化しました")
+        self.use_cache = use_cache
+        self.cache_manager = CacheManager() if use_cache else None
+        logger.info(f"J-Quants API クライアントを初期化しました (キャッシュ: {'有効' if use_cache else '無効'})")
 
     def test_connection(self):
         """
@@ -44,10 +52,22 @@ class JQuantsClient:
         Returns:
             DataFrame: 銘柄一覧データ
         """
+        # キャッシュチェック
+        if self.use_cache:
+            cached_data = self.cache_manager.get_listed_info_cache()
+            if cached_data is not None:
+                logger.success(f"上場銘柄一覧をキャッシュから取得: {len(cached_data)}銘柄")
+                return cached_data
+
         try:
-            logger.info("上場銘柄一覧を取得中...")
+            logger.info("上場銘柄一覧をAPIから取得中...")
             df = self.client.get_list()
             logger.success(f"上場銘柄一覧を取得しました: {len(df)}銘柄")
+
+            # キャッシュに保存
+            if self.use_cache:
+                self.cache_manager.save_listed_info_cache(df)
+
             return df
         except Exception as e:
             logger.error(f"上場銘柄一覧取得エラー: {e}")
@@ -64,13 +84,20 @@ class JQuantsClient:
         Returns:
             DataFrame: 株価データ
         """
-        try:
-            # dateが指定されていない場合は今日の日付を使用
-            if date is None:
-                date = datetime.now(tz.gettz("Asia/Tokyo"))
-                logger.info(f"日付未指定のため今日の日付を使用: {date.strftime('%Y-%m-%d')}")
+        # dateが指定されていない場合は今日の日付を使用
+        if date is None:
+            date = datetime.now(tz.gettz("Asia/Tokyo"))
+            logger.info(f"日付未指定のため今日の日付を使用: {date.strftime('%Y-%m-%d')}")
 
-            logger.info(f"日次株価データを取得中... (code={code}, date={date.strftime('%Y-%m-%d') if date else None})")
+        # キャッシュチェック（全銘柄の場合のみ）
+        if self.use_cache and code is None:
+            cached_data = self.cache_manager.get_prices_cache(date)
+            if cached_data is not None:
+                logger.success(f"日次株価データをキャッシュから取得: {len(cached_data)}件")
+                return cached_data
+
+        try:
+            logger.info(f"日次株価データをAPIから取得中... (code={code}, date={date.strftime('%Y-%m-%d')})")
 
             if code:
                 # 特定銘柄の場合はget_eq_bars_dailyを使用
@@ -86,6 +113,11 @@ class JQuantsClient:
                 )
 
             logger.success(f"日次株価データを取得しました: {len(df)}件")
+
+            # キャッシュに保存（全銘柄の場合のみ）
+            if self.use_cache and code is None:
+                self.cache_manager.save_prices_cache(date, df)
+
             return df
         except Exception as e:
             logger.error(f"日次株価データ取得エラー: {e}")
@@ -106,8 +138,15 @@ class JQuantsClient:
                 - ShOutFY: 期末発行済株式数
                 - その他財務情報
         """
+        # キャッシュチェック
+        if self.use_cache:
+            cached_data = self.cache_manager.get_financial_cache()
+            if cached_data is not None:
+                logger.success(f"財務情報をキャッシュから取得: {len(cached_data)}件")
+                return cached_data
+
         try:
-            logger.info("財務情報を取得中（直近30日分）...")
+            logger.info("財務情報をAPIから取得中（直近30日分）...")
 
             # 直近30日分のデータを取得（各銘柄の最新財務情報を含めるため）
             from datetime import datetime, timedelta
@@ -116,6 +155,11 @@ class JQuantsClient:
 
             df = self.client.get_fin_summary_range(start_dt=start_dt, end_dt=end_dt)
             logger.success(f"財務情報を取得しました: {len(df)}件")
+
+            # キャッシュに保存
+            if self.use_cache:
+                self.cache_manager.save_financial_cache(df)
+
             return df
         except Exception as e:
             logger.error(f"財務情報取得エラー: {e}")

@@ -67,7 +67,7 @@ def check_candidates_exist():
     """
     today = datetime.now()
     csv_filename = f"candidates_{today.strftime('%Y%m%d')}.csv"
-    csv_path = os.path.join("results", csv_filename)
+    csv_path = os.path.join("data", csv_filename)
 
     logger.info("=" * 60)
     logger.info("候補銘柄CSV確認")

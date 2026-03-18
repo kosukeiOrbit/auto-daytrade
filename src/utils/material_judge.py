@@ -136,7 +136,21 @@ class MaterialJudge:
         Returns:
             bool: True=除外すべき, False=残す
         """
-        # strength=弱 かつ has_material=false → 除外
-        if judgment['strength'] == '弱' and not judgment['has_material']:
-            return True
+        # has_material=false の場合、ネガティブ材料かチェック
+        if not judgment['has_material']:
+            summary = judgment.get('summary', '')
+            if summary:
+                # ネガティブキーワードをチェック
+                negative_keywords = [
+                    '下方修正', '赤字', '減益', '悪化', '低迷', '減収',
+                    '下振れ', '損失', '減少', '縮小', '撤退', '停止'
+                ]
+                if any(keyword in summary for keyword in negative_keywords):
+                    # ネガティブ材料は除外
+                    return True
+
+            # ネガティブでない場合は strength をチェック
+            if judgment['strength'] == '弱':
+                return True
+
         return False

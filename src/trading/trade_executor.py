@@ -49,7 +49,7 @@ class TradeExecutor:
             date = datetime.now()
 
         csv_filename = f"candidates_{date.strftime('%Y%m%d')}.csv"
-        csv_path = os.path.join("results", csv_filename)
+        csv_path = os.path.join("data", csv_filename)
 
         if not os.path.exists(csv_path):
             logger.warning(f"候補銘柄CSVが見つかりません: {csv_path}")
@@ -307,9 +307,9 @@ class TradeExecutor:
         # 各候補銘柄に対してエントリー判定
         entry_count = 0
         for idx, row in candidates_df.iterrows():
-            symbol = str(row['code'])
+            symbol = str(row['Code'])
 
-            logger.info(f"\n[{idx+1}/{len(candidates_df)}] {symbol} {row['name']}")
+            logger.info(f"\n[{idx+1}/{len(candidates_df)}] {symbol}")
 
             # エントリーシグナルチェック
             if not self.check_entry_signal(symbol):

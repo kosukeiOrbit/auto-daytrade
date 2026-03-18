@@ -180,12 +180,55 @@ class Screener:
         start_date = date - timedelta(days=lookback_days + 10)
 
         logger.info(f"\n[1/5] 株価データ取得中（{start_date.strftime('%Y-%m-%d')} 〜 {date.strftime('%Y-%m-%d')}）...")
+
+        # キャッシュマネージャーを使用
+        cache_manager = self.client.cache_manager
+
         try:
-            df_prices = self.client.client.get_eq_bars_daily_range(
-                start_dt=start_date,
-                end_dt=date
-            )
-            logger.info(f"取得件数: {len(df_prices)}件")
+            # まずキャッシュから期間全体のデータ取得を試みる
+            if cache_manager:
+                df_cached = cache_manager.get_prices_range_cache(start_date, date)
+                if df_cached is not None:
+                    logger.success(f"株価データをキャッシュから取得: {len(df_cached)}件")
+                    df_prices = df_cached
+                else:
+                    # キャッシュがない場合、日毎に取得してキャッシュ
+                    logger.info("キャッシュなし。日毎にデータ取得とキャッシュを実行...")
+                    df_list = []
+                    current_date = start_date
+
+                    while current_date <= date:
+                        # 各日のキャッシュをチェック
+                        df_day = cache_manager.get_prices_cache(current_date)
+
+                        if df_day is None:
+                            # キャッシュがない日のみAPIから取得
+                            logger.info(f"  APIから取得: {current_date.strftime('%Y-%m-%d')}")
+                            df_day = self.client.get_daily_quotes(date=current_date)
+                            # 取得後すぐにキャッシュに保存（次回から使える）
+                            if df_day is not None and len(df_day) > 0:
+                                cache_manager.save_prices_cache(current_date, df_day)
+                        else:
+                            logger.info(f"  キャッシュ使用: {current_date.strftime('%Y-%m-%d')}")
+
+                        if df_day is not None and len(df_day) > 0:
+                            df_list.append(df_day)
+
+                        current_date += timedelta(days=1)
+
+                    if len(df_list) == 0:
+                        logger.error("株価データが取得できませんでした")
+                        return pd.DataFrame()
+
+                    df_prices = pd.concat(df_list, ignore_index=True)
+                    logger.success(f"株価データ取得完了: {len(df_prices)}件")
+            else:
+                # キャッシュ無効の場合は従来通りの一括取得
+                df_prices = self.client.client.get_eq_bars_daily_range(
+                    start_dt=start_date,
+                    end_dt=date
+                )
+                logger.info(f"取得件数: {len(df_prices)}件")
         except Exception as e:
             logger.error(f"株価データ取得エラー: {e}")
             logger.error("API制限またはネットワークエラーの可能性があります")
@@ -416,6 +459,9 @@ class Screener:
                 # 発行済株式数を取得
                 df_shares = statements_latest[['Code4', issued_shares_col]].copy()
                 df_shares = df_shares.rename(columns={issued_shares_col: 'IssuedShares'})
+
+                # IssuedSharesを数値型に変換（文字列や無効な値はNaNになる）
+                df_shares['IssuedShares'] = pd.to_numeric(df_shares['IssuedShares'], errors='coerce')
 
                 df_filtered = df_filtered.merge(
                     df_shares,
