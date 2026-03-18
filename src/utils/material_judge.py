@@ -65,13 +65,15 @@ class MaterialJudge:
 
         logger.info(f"{code} {name}: Claude APIで材料判定中...")
 
-        prompt = f"""銘柄名: {name}（{code}）
+        prompt = f"""銘柄名: {name}（証券コード: {code}）
 直近ニュース・適時開示:
 {news_text}
 
 【重要】以下の判定基準に従って評価してください:
-- **必ず銘柄名「{name}」に直接関連する材料のみを判定すること**
-- 他の銘柄（TOKYO BASE、ソニー等）の情報が含まれていても無視すること
+- **対象銘柄「{name}」（コード: {code}）に直接関連する材料のみを判定すること**
+- ニュースが他の銘柄（{code}以外の証券コード）に関するものの場合は has_material=false を返すこと
+- 特に決算情報は証券コードと銘柄名が一致する企業のもののみ採用すること
+- 他社との提携・協業・共同開発などは、{name}が主体であれば材料として評価すること
 - 銘柄名が明示されていない一般的な市況・セクター情報は除外すること
 - 決算発表から3営業日以上経過している場合、strengthを「弱」寄りに評価すること
 - ニュースの日付が古い（1週間以上前）場合は、strengthを「弱」寄りに評価すること
@@ -107,22 +109,6 @@ class MaterialJudge:
                 content = content[:-3]  # ``` を削除
 
             result = json.loads(content.strip())
-
-            # 材料検証: 銘柄名との関連性チェック
-            if result['has_material'] and result.get('summary'):
-                # summaryに銘柄名の一部（最初の2-3文字）が含まれているか確認
-                # 例: 「クラシコム」→「クラシ」、「ソニー」→「ソニ」
-                name_prefix = name[:2] if len(name) >= 2 else name
-
-                # 銘柄名チェック（部分一致でOK）
-                # summaryに銘柄名が含まれていない場合、has_material=Falseに変更
-                if name_prefix not in result['summary'] and name not in result['summary']:
-                    logger.warning(
-                        f"{code} {name}: 材料が銘柄名と一致しない可能性があります "
-                        f"(要約: {result['summary']}) → has_material=Falseに変更"
-                    )
-                    result['has_material'] = False
-                    result['strength'] = '弱'
 
             logger.success(
                 f"{code} {name}: "
