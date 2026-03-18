@@ -100,7 +100,7 @@ def check_candidates_exist():
     return exists, csv_path
 
 
-def trading_loop(executor):
+def trading_loop(executor, notifier=None):
     """
     取引時間中の監視ループ
 
@@ -118,13 +118,14 @@ def trading_loop(executor):
     midday_exit_done = False
     eod_exit_done = False
 
+    end_time = datetime.now().replace(hour=15, minute=30, second=0, microsecond=0)
+
     while True:
         now = datetime.now()
         current_hour = now.hour
         current_minute = now.minute
 
         # 15:30到達で終了
-        end_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
         if now >= end_time:
             logger.info("15:30到達。取引監視ループを終了します")
             break
@@ -137,8 +138,8 @@ def trading_loop(executor):
                 midday_exit_done = True
             except Exception as e:
                 logger.error(f"前場引け決済エラー: {e}")
-                notifier = DiscordNotifier()
-                notifier.send_error(f"⚠️ 前場引け決済失敗: {e}\nポジションを手動確認してください")
+                if notifier:
+                    notifier.send_error(f"⚠️ 前場引け決済失敗: {e}\nポジションを手動確認してください")
 
         # 15:15-15:25: 大引け前全決済
         if not eod_exit_done and current_hour == 15 and 15 <= current_minute <= 25:
@@ -148,8 +149,8 @@ def trading_loop(executor):
                 eod_exit_done = True
             except Exception as e:
                 logger.error(f"大引け前決済エラー: {e}")
-                notifier = DiscordNotifier()
-                notifier.send_error(f"⚠️ 大引け前決済失敗: {e}\nポジションを手動確認してください")
+                if notifier:
+                    notifier.send_error(f"⚠️ 大引け前決済失敗: {e}\nポジションを手動確認してください")
 
         # 1分待機
         time.sleep(60)
@@ -180,8 +181,16 @@ def main():
         notifier.send_error(error_msg)
         sys.exit(1)
 
-    # STEP 2: 候補銘柄CSV確認
+    # STEP 2: 候補銘柄CSV確認（最大3回リトライ、朝スクリーニング遅延対策）
     exists, csv_path = check_candidates_exist()
+
+    if not exists:
+        for retry in range(1, 4):
+            logger.info(f"CSV未検出。リトライ {retry}/3（30秒待機）...")
+            time.sleep(30)
+            exists, csv_path = check_candidates_exist()
+            if exists:
+                break
 
     if not exists:
         warning_msg = f"候補銘柄CSVが見つかりません。エントリーなしで終了します。\nファイル: {csv_path}"
@@ -226,24 +235,33 @@ def main():
             max_daily_loss_rate=0.03,
             max_consecutive_losses=3
         )
-
-        # STEP 5: エントリー実行
-        logger.info("=" * 60)
-        logger.info("エントリー実行")
-        logger.info("=" * 60)
-
-        executor.execute_daily_trading()
-
-        logger.success("エントリー実行完了")
-
-        # STEP 6: 取引監視ループ（11:30含み損決済、15:20全決済）
-        trading_loop(executor)
-
     except Exception as e:
-        error_msg = f"自動売買実行エラー: {e}"
+        error_msg = f"TradeExecutor初期化エラー: {e}"
         logger.error(error_msg)
         notifier.send_error(error_msg)
         sys.exit(1)
+
+    # STEP 5: エントリー実行
+    logger.info("=" * 60)
+    logger.info("エントリー実行")
+    logger.info("=" * 60)
+
+    try:
+        executor.execute_daily_trading()
+        logger.success("エントリー実行完了")
+    except Exception as e:
+        error_msg = f"エントリー実行エラー: {e}"
+        logger.error(error_msg)
+        notifier.send_error(f"⚠️ {error_msg}\nポジションが残っている可能性があります。取引監視ループは継続します。")
+
+    # STEP 6: 取引監視ループ（11:30含み損決済、15:20全決済）
+    # エントリーが失敗しても、既存ポジションの決済のために必ず実行する
+    try:
+        trading_loop(executor, notifier)
+    except Exception as e:
+        error_msg = f"取引監視ループエラー: {e}"
+        logger.error(error_msg)
+        notifier.send_error(f"⚠️ {error_msg}\nポジションを手動確認してください")
 
     logger.info("=" * 60)
     logger.info("自動売買スクリプト正常終了")

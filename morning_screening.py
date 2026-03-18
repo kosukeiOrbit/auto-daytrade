@@ -117,6 +117,9 @@ def main():
 
     logger.success(f"出来高急増銘柄: {len(volume_candidates)}銘柄")
 
+    # J-Quantsクライアント（TDnet追加や前日フィルタで使用）
+    jquants = JQuantsClient()
+
     # STEP 1b: TDnet引け後適時開示取得
     logger.info("\n" + "=" * 60)
     logger.info("STEP 1b: TDnet引け後適時開示取得")
@@ -136,26 +139,32 @@ def main():
     candidates = volume_candidates.copy()
 
     # TDnet銘柄で出来高急増リストに含まれていないものを追加
-    existing_codes = set(candidates['Code'].astype(str).tolist())
-    new_tdnet_codes = [c for c in tdnet_codes if c not in existing_codes]
+    existing_codes = set(
+        pd.to_numeric(candidates['Code'], errors='coerce')
+        .dropna()
+        .astype(int)
+        .astype(str)
+        .str.zfill(4)
+    )
+    normalized_tdnet_codes = [str(code).zfill(4) for code in tdnet_codes]
+    new_tdnet_codes = [code for code in normalized_tdnet_codes if code not in existing_codes]
 
     if len(new_tdnet_codes) > 0:
         logger.info(f"TDnet銘柄のうち出来高急増リストに未含有: {len(new_tdnet_codes)}銘柄")
         logger.info(f"  コード: {', '.join(new_tdnet_codes[:10])}")
 
         # J-QuantsからOHLCVを取得してcandidatesに追加
-        jquants = JQuantsClient()
         df_prices = jquants.get_daily_quotes(date=target_date)
 
         if df_prices is not None and len(df_prices) > 0:
             tdnet_additions = []
             for code in new_tdnet_codes:
-                # J-Quants APIのCodeは5桁（末尾0付き）
-                code_5digit = str(code) + "0"
-                match = df_prices[df_prices['Code'].astype(str) == code_5digit]
+                # J-Quants APIのCodeは多くが末尾0付き5桁
+                code_for_api = code if len(code) == 5 else f"{code}0"
+                match = df_prices[df_prices['Code'].astype(str) == code_for_api]
 
                 if len(match) == 0:
-                    logger.debug(f"  {code}: 株価データなし（スキップ）")
+                    logger.info(f"  {code}: 株価データなし（スキップ）")
                     continue
 
                 row = match.iloc[0]
@@ -163,7 +172,7 @@ def main():
                 # 予算フィルタ（1単元=100株が買える銘柄のみ）
                 unit_price = row['C'] * 100
                 if unit_price > budget:
-                    logger.debug(f"  {code}: 予算超過（{unit_price:,.0f}円）")
+                    logger.info(f"  {code}: 予算超過（{unit_price:,.0f}円）")
                     continue
 
                 tdnet_additions.append({
@@ -286,7 +295,6 @@ def main():
     logger.info("STEP 4.5: 前日ストップ高除外フィルタ")
     logger.info("=" * 60)
 
-    jquants = JQuantsClient()
     filtered_codes = []
 
     for idx, row in candidates.iterrows():
@@ -400,7 +408,7 @@ if __name__ == "__main__":
         try:
             notifier = DiscordNotifier()
             notifier.send_error(f"朝スクリーニング実行エラー: {str(e)[:100]}")
-        except:
+        except Exception:
             pass  # 通知失敗しても続行
 
         raise
