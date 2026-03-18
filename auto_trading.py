@@ -29,6 +29,18 @@ from src.trading.trade_executor import TradeExecutor
 from src.utils.notifier import DiscordNotifier
 from src.utils.kabu_client import KabuClient
 
+# ログファイル設定
+log_dir = "logs"
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, f"auto_trading_{datetime.now().strftime('%Y%m%d')}.log")
+logger.add(
+    log_file,
+    rotation="1 day",
+    retention="30 days",
+    encoding="utf-8",
+    level="INFO"
+)
+
 
 def check_kabu_station_running():
     """

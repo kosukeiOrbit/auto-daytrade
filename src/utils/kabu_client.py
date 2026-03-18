@@ -190,6 +190,7 @@ class KabuClient:
             side: 売買区分 (2=買, 1=売)
             qty: 数量
             order_type: 注文種類 (1=成行, 2=指値, 3=逆指値)
+                        ※注意: APIのFrontOrderTypeは10=成行, 20=指値, 30=逆指値
             price: 指値価格 (成行の場合は0)
             stop_price: 逆指値トリガー価格 (逆指値の場合のみ)
 
@@ -212,6 +213,11 @@ class KabuClient:
                 "X-API-KEY": token
             }
 
+            # order_typeをAPIのFrontOrderTypeに変換
+            # 1=成行 → 10, 2=指値 → 20, 3=逆指値 → 30
+            front_order_type_map = {1: 10, 2: 20, 3: 30}
+            front_order_type = front_order_type_map.get(order_type, 10)
+
             # 注文リクエストボディ
             order_data = {
                 "Password": self.api_password,  # 注文パスワード（APIパスワードと同じ）
@@ -221,9 +227,10 @@ class KabuClient:
                 "Side": str(side),
                 "CashMargin": 1,  # 1=現物
                 "DelivType": 2,  # 2=お預り金
+                "FundType": "AA",  # AA=信用代用（現物買の場合は必須）
                 "AccountType": 4,  # 4=特定
                 "Qty": qty,
-                "FrontOrderType": order_type,  # 1=成行, 2=指値, 3=逆指値
+                "FrontOrderType": front_order_type,  # 10=成行, 20=指値, 30=逆指値
                 "Price": price,
                 "ExpireDay": 0  # 0=当日中
             }
@@ -235,7 +242,7 @@ class KabuClient:
 
             body = json.dumps(order_data)
 
-            logger.info(f"注文発注: {symbol} {'買' if side == 2 else '売'} {qty}株 種類={order_type}")
+            logger.info(f"注文発注: {symbol} {'買' if side == 2 else '売'} {qty}株 種類={order_type} (FrontOrderType={front_order_type})")
             logger.debug(f"注文データ: {order_data}")
 
             response = requests.post(url, headers=headers, data=body, timeout=10)
