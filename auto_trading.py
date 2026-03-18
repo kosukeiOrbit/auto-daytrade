@@ -23,11 +23,13 @@
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from loguru import logger
+import jpholiday
 from src.trading.trade_executor import TradeExecutor
 from src.utils.notifier import DiscordNotifier
 from src.utils.kabu_client import KabuClient
+from src.utils.config import Config
 
 # ログファイル設定
 log_dir = "logs"
@@ -120,10 +122,19 @@ def wait_until_end_of_day():
 
 def main():
     """メイン処理"""
+    now = datetime.now()
+
     logger.info("=" * 60)
     logger.info("自動売買スクリプト開始")
-    logger.info(f"実行時刻: {datetime.now().strftime('%Y/%m/%d %H:%M:%S')}")
+    logger.info(f"実行時刻: {now.strftime('%Y/%m/%d %H:%M:%S')}")
     logger.info("=" * 60)
+
+    # 営業日チェック（土日祝日は静かに終了）
+    if now.weekday() >= 5 or jpholiday.is_holiday(now):
+        weekday_name = ['月', '火', '水', '木', '金', '土', '日'][now.weekday()]
+        logger.info(f"本日は営業日ではありません ({weekday_name}・{'祝日' if jpholiday.is_holiday(now) else '週末'})")
+        logger.info("自動売買スクリプトを終了します")
+        sys.exit(0)
 
     notifier = DiscordNotifier()
 
@@ -143,16 +154,40 @@ def main():
         notifier.send_message(f"⚠️ 自動売買スキップ\n{warning_msg}")
         sys.exit(0)
 
-    # STEP 3: 自動売買実行
+    # STEP 3: 買付余力取得と予算計算
+    logger.info("=" * 60)
+    logger.info("買付余力取得")
+    logger.info("=" * 60)
+
+    try:
+        client = KabuClient()
+        wallet = client.get_wallet_cash()
+        available_cash = wallet['stock_account_wallet']
+
+        # 検証環境の場合（nullの場合）は固定予算を使用
+        if available_cash is None:
+            budget = 800_000
+            logger.warning(f"検証環境のため固定予算を使用: {budget:,}円")
+        else:
+            # 本番環境: 買付余力 × 投資比率
+            budget = int(available_cash * Config.INVESTMENT_RATIO)
+            logger.info(f"買付余力: {available_cash:,}円 × {Config.INVESTMENT_RATIO} = 本日の投資予算: {budget:,}円")
+
+    except Exception as e:
+        # API取得失敗時は固定予算を使用
+        budget = 800_000
+        logger.warning(f"買付余力取得エラー、固定予算を使用: {e}")
+
+    # STEP 4: 自動売買実行
     logger.info("=" * 60)
     logger.info("自動売買実行開始")
     logger.info("=" * 60)
 
     try:
         # TradeExecutor初期化
-        # 予算80万円、最大損失率3%、最大連敗3回
+        # 最大損失率3%、最大連敗3回
         executor = TradeExecutor(
-            budget=800000,
+            budget=budget,
             max_daily_loss_rate=0.03,
             max_consecutive_losses=3
         )
@@ -168,7 +203,7 @@ def main():
         notifier.send_error(error_msg)
         sys.exit(1)
 
-    # STEP 4: 15:30まで待機
+    # STEP 5: 15:30まで待機
     wait_until_end_of_day()
 
     logger.info("=" * 60)
