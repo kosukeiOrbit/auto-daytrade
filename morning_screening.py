@@ -136,9 +136,62 @@ def main():
     candidates = volume_candidates.copy()
 
     # TDnet銘柄で出来高急増リストに含まれていないものを追加
-    # ※ただし、TDnet銘柄の詳細データ（OHLCV等）は別途取得が必要
-    # 今回は出来高急増銘柄のみでフィルタ済みのため、TDnetコードは参考情報として保持
-    tdnet_codes_set = set(tdnet_codes)
+    existing_codes = set(candidates['Code'].astype(str).tolist())
+    new_tdnet_codes = [c for c in tdnet_codes if c not in existing_codes]
+
+    if len(new_tdnet_codes) > 0:
+        logger.info(f"TDnet銘柄のうち出来高急増リストに未含有: {len(new_tdnet_codes)}銘柄")
+        logger.info(f"  コード: {', '.join(new_tdnet_codes[:10])}")
+
+        # J-QuantsからOHLCVを取得してcandidatesに追加
+        jquants = JQuantsClient()
+        df_prices = jquants.get_daily_quotes(date=target_date)
+
+        if df_prices is not None and len(df_prices) > 0:
+            tdnet_additions = []
+            for code in new_tdnet_codes:
+                # J-Quants APIのCodeは5桁（末尾0付き）
+                code_5digit = str(code) + "0"
+                match = df_prices[df_prices['Code'].astype(str) == code_5digit]
+
+                if len(match) == 0:
+                    logger.debug(f"  {code}: 株価データなし（スキップ）")
+                    continue
+
+                row = match.iloc[0]
+
+                # 予算フィルタ（1単元=100株が買える銘柄のみ）
+                unit_price = row['C'] * 100
+                if unit_price > budget:
+                    logger.debug(f"  {code}: 予算超過（{unit_price:,.0f}円）")
+                    continue
+
+                tdnet_additions.append({
+                    'Code': int(code),
+                    'Date': row.get('Date'),
+                    'O': row.get('O'),
+                    'H': row.get('H'),
+                    'L': row.get('L'),
+                    'C': row.get('C'),
+                    'Vo': row.get('Vo'),
+                    'AvgVolume': None,
+                    'VolumeSurgeRatio': 0.0,  # 出来高急増ではないので0
+                    'MA25': None,
+                    'TradingValue': row.get('C', 0) * row.get('Vo', 0),
+                    'AvgTradingValue5d': None,
+                    'MarketCap': 0,
+                })
+
+            if len(tdnet_additions) > 0:
+                df_tdnet = pd.DataFrame(tdnet_additions)
+                candidates = pd.concat([candidates, df_tdnet], ignore_index=True)
+                logger.success(f"TDnet銘柄 {len(tdnet_additions)}銘柄を候補に追加")
+            else:
+                logger.info("TDnet銘柄: フィルタ後に追加対象なし")
+        else:
+            logger.warning("TDnet銘柄の株価データ取得失敗")
+    else:
+        logger.info("TDnet銘柄: 全て出来高急増リストに含まれている、または開示なし")
 
     # STEP 2: 地合いチェック
     logger.info("\n" + "=" * 60)
@@ -177,9 +230,9 @@ def main():
 
     news_scraper = NewsScraper()
 
-    # 各銘柄のニュースと会社名を取得（上位10銘柄のみ、API制限対策）
+    # 各銘柄のニュースと会社名を取得（上位20銘柄、Claude APIコストとのバランス）
     news_data = {}
-    for idx, row in candidates.head(10).iterrows():
+    for idx, row in candidates.head(20).iterrows():
         code = str(row['Code'])
 
         # 会社名取得

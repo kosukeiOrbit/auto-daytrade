@@ -124,7 +124,8 @@ def trading_loop(executor):
         current_minute = now.minute
 
         # 15:30到達で終了
-        if current_hour >= 15 and current_minute >= 30:
+        end_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
+        if now >= end_time:
             logger.info("15:30到達。取引監視ループを終了します")
             break
 
@@ -136,6 +137,8 @@ def trading_loop(executor):
                 midday_exit_done = True
             except Exception as e:
                 logger.error(f"前場引け決済エラー: {e}")
+                notifier = DiscordNotifier()
+                notifier.send_error(f"⚠️ 前場引け決済失敗: {e}\nポジションを手動確認してください")
 
         # 15:15-15:25: 大引け前全決済
         if not eod_exit_done and current_hour == 15 and 15 <= current_minute <= 25:
@@ -145,6 +148,8 @@ def trading_loop(executor):
                 eod_exit_done = True
             except Exception as e:
                 logger.error(f"大引け前決済エラー: {e}")
+                notifier = DiscordNotifier()
+                notifier.send_error(f"⚠️ 大引け前決済失敗: {e}\nポジションを手動確認してください")
 
         # 1分待機
         time.sleep(60)
