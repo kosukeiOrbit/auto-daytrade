@@ -156,7 +156,8 @@ class MaterialJudge:
                     return True
 
             # ネガティブでない場合は strength をチェック
-            if judgment['strength'] == '弱':
+            strength = judgment.get('strength')
+            if strength is None or strength == '弱':
                 return True
 
         return False

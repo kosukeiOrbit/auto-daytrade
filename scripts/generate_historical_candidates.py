@@ -21,6 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.jquants_client import JQuantsClient
 from src.utils.config import Config
+from src.utils.news_scraper import NewsScraper
+from src.utils.material_judge import MaterialJudge
 
 # ログファイル設定
 os.makedirs("logs", exist_ok=True)
@@ -208,16 +210,16 @@ def filter_volume_surge(df_day, df_all, listed_info, surge_threshold=2.0, lookba
 def main():
     """メイン処理"""
     logger.info("=" * 60)
-    logger.info("過去120営業日分のcandidates CSV一括生成（キャッシュ利用版）")
+    logger.info("過去240営業日分のcandidates CSV一括生成（キャッシュ利用版）")
     logger.info("=" * 60)
 
     # 日本時間
     jst = tz.gettz("Asia/Tokyo")
     now = datetime.now(jst)
 
-    # 過去120営業日を取得（約6ヶ月間）
+    # 過去240営業日を取得（約1年間）
     logger.info("営業日リストを生成中...")
-    business_days = get_business_days(now, num_days=120)
+    business_days = get_business_days(now, num_days=240)
     logger.info(f"対象期間: {business_days[0].strftime('%Y-%m-%d')} ～ {business_days[-1].strftime('%Y-%m-%d')}")
 
     # STEP 1: J-Quants APIクライアント初期化
@@ -233,11 +235,11 @@ def main():
 
     # STEP 2: 株価データを日付ごとに順次取得（レート制限対策）
     logger.info("\n" + "=" * 60)
-    logger.info("STEP 2: 株価データ取得（120営業日分、キャッシュ利用）")
+    logger.info("STEP 2: 株価データ取得（240営業日分、キャッシュ利用）")
     logger.info("=" * 60)
 
     logger.info(f"期間: {business_days[0].strftime('%Y-%m-%d')} ～ {business_days[-1].strftime('%Y-%m-%d')}")
-    logger.info("日付ごとに順次取得中... (120リクエスト、キャッシュから高速取得)")
+    logger.info("日付ごとに順次取得中... (240リクエスト、キャッシュから高速取得)")
 
     df_all_list = []
 
@@ -378,11 +380,174 @@ def main():
     logger.info("=" * 60)
 
 
+def judge_materials(days=None):
+    """
+    既存candidates CSVに対してClaude API材料判定を実行し、上書き保存する。
+
+    Args:
+        days: 処理する直近N日分（Noneの場合は全件）
+    """
+    import glob
+
+    logger.info("=" * 60)
+    logger.info("材料判定バッチ処理開始")
+    logger.info("=" * 60)
+
+    # 対象ファイルを検索
+    all_files = sorted(glob.glob("data/candidates_*.csv"))
+
+    if len(all_files) == 0:
+        logger.error("candidates CSVが見つかりません。先にmain()を実行してください。")
+        return
+
+    # 直近N日分に絞る
+    if days is not None:
+        all_files = all_files[-days:]
+
+    # 判定済みファイルをスキップするためチェック
+    target_files = []
+    for f in all_files:
+        df = pd.read_csv(f, encoding='utf-8-sig')
+        # material_strengthが全て'中'固定 = 未判定
+        strengths = set(df['material_strength'].dropna().unique())
+        if strengths == {'中'} and df['has_material'].all():
+            target_files.append(f)
+        else:
+            logger.info(f"スキップ（判定済み）: {os.path.basename(f)}")
+
+    if len(target_files) == 0:
+        logger.info("全ファイルが判定済みです。")
+        return
+
+    # 推定コスト計算
+    total_api_calls = 0
+    for f in target_files:
+        df = pd.read_csv(f, encoding='utf-8-sig')
+        total_api_calls += min(len(df), 20)  # 上位20銘柄のみ判定
+
+    logger.info(f"対象ファイル: {len(target_files)}件")
+    logger.info(f"推定API呼び出し回数: {total_api_calls}回")
+    logger.info(f"推定コスト: 約${total_api_calls * 0.0005:.2f}（claude-haiku想定）")
+    logger.info("=" * 60)
+
+    # 初期化
+    news_scraper = NewsScraper()
+    judge = MaterialJudge()
+
+    processed_files = 0
+    total_judged = 0
+    total_adopted = 0
+    total_excluded = 0
+
+    for file_idx, filepath in enumerate(target_files, 1):
+        date_str = os.path.basename(filepath).replace('candidates_', '').replace('.csv', '')
+        logger.info(f"\n[{file_idx}/{len(target_files)}] {date_str}: 材料判定中...")
+
+        try:
+            df = pd.read_csv(filepath, encoding='utf-8-sig')
+
+            if len(df) == 0:
+                continue
+
+            # reference_date: CSVの日付の翌営業日6:30を想定
+            # （本番のmorning_screeningが実行される時刻）
+            csv_date = datetime.strptime(date_str, '%Y%m%d')
+
+            # 上位20銘柄のみ判定（本番と同じ制限）
+            judge_targets = df.head(20)
+
+            # 全銘柄のhas_materialをFalseにリセット
+            df['has_material'] = False
+            df['material_strength'] = '弱'
+            df['material_type'] = ''
+            df['material_summary'] = ''
+
+            judged_count = 0
+            adopted_count = 0
+
+            for idx, row in judge_targets.iterrows():
+                code_raw = str(row['Code'])
+                # J-Quants形式（5桁、末尾0）を4桁に変換（株探は4桁コード）
+                if len(code_raw) == 5 and code_raw.endswith('0'):
+                    code = code_raw[:-1]
+                elif len(code_raw) >= 5:
+                    code = str(int(code_raw) // 10)
+                else:
+                    code = code_raw
+                name = row.get('Name', '')
+
+                # ニュース取得（株探）
+                # reference_dateをCSV日付の翌日にして鮮度フィルタを適用
+                news_text = news_scraper.get_stock_news(
+                    code, max_articles=3, reference_date=csv_date + timedelta(days=1)
+                )
+
+                # 出来高急増情報を結合
+                surge_ratio = row.get('VolumeSurgeRatio', 0)
+                combined_text = f"出来高急増: {surge_ratio:.2f}倍\n\n{news_text}"
+
+                # Claude API判定
+                judgment = judge.judge_material(code, name, combined_text)
+
+                judged_count += 1
+
+                if judgment and not judge.should_exclude(judgment):
+                    # 採用
+                    df.loc[idx, 'has_material'] = True
+                    df.loc[idx, 'material_strength'] = judgment.get('strength', '中')
+                    df.loc[idx, 'material_type'] = judgment.get('material_type', '')
+                    df.loc[idx, 'material_summary'] = judgment.get('summary', '')
+                    adopted_count += 1
+                    logger.debug(f"  採用: {code} {name} [{judgment.get('strength', '')}] {judgment.get('summary', '')}")
+                else:
+                    logger.debug(f"  除外: {code} {name}")
+
+                # レート制限対策
+                time.sleep(0.5)
+
+            # 21位以降の銘柄は未判定のまま（has_material=False, strength='弱'）
+
+            # CSV上書き保存
+            df.to_csv(filepath, index=False, encoding='utf-8-sig')
+
+            total_judged += judged_count
+            total_adopted += adopted_count
+            total_excluded += judged_count - adopted_count
+            processed_files += 1
+
+            logger.info(f"  {date_str}: {judged_count}件判定 → 採用{adopted_count}件 / 除外{judged_count - adopted_count}件")
+
+        except Exception as e:
+            logger.error(f"  {date_str}: エラー - {e}")
+            continue
+
+    # サマリー
+    logger.info("\n" + "=" * 60)
+    logger.info("材料判定バッチ処理完了")
+    logger.info("=" * 60)
+    logger.info(f"処理ファイル: {processed_files}件")
+    logger.info(f"判定銘柄数: {total_judged}件")
+    logger.info(f"採用: {total_adopted}件 ({total_adopted/total_judged*100:.1f}%)" if total_judged > 0 else "採用: 0件")
+    logger.info(f"除外: {total_excluded}件 ({total_excluded/total_judged*100:.1f}%)" if total_judged > 0 else "除外: 0件")
+    logger.info("=" * 60)
+
+
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description='過去candidates CSV生成・材料判定')
+    parser.add_argument('--judge', action='store_true', help='既存CSVに材料判定を実行')
+    parser.add_argument('--days', type=int, default=None, help='直近N日分のみ処理')
+    args = parser.parse_args()
+
     try:
         # 設定検証
         Config.validate()
-        main()
+
+        if args.judge:
+            judge_materials(days=args.days)
+        else:
+            main()
     except Exception as e:
         logger.error(f"実行エラー: {e}")
         logger.exception("詳細なエラー情報:")
