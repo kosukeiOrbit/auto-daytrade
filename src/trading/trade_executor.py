@@ -347,6 +347,7 @@ class TradeExecutor:
                 'entry_time': datetime.now(),
                 'material_strength': '',
                 'volume_surge': 0.0,
+                'entry_pattern': 'A',
             }
 
             self.active_positions[symbol] = position_info
@@ -597,6 +598,10 @@ class TradeExecutor:
             material_strength = pos_info.get('material_strength', '')
             volume_surge = pos_info.get('volume_surge', 0.0)
 
+            entry_time_obj = pos_info.get('entry_time')
+            entry_time_str = entry_time_obj.strftime('%H:%M') if entry_time_obj else ''
+            entry_pattern = pos_info.get('entry_pattern', 'A')
+
             record = {
                 'date': datetime.now().strftime('%Y%m%d'),
                 'code': symbol,
@@ -608,13 +613,26 @@ class TradeExecutor:
                 'exit_reason': exit_reason,
                 'material_strength': material_strength,
                 'volume_surge': round(volume_surge, 2),
+                'entry_time': entry_time_str,
+                'entry_pattern': entry_pattern,
             }
 
             df_new = pd.DataFrame([record])
+            expected_columns = list(record.keys())
 
-            # ファイルが存在すれば追記、なければ新規作成
+            # ファイルが存在すれば追記（ヘッダー不一致時は再書き込み）
             if os.path.exists(filepath):
-                df_new.to_csv(filepath, mode='a', header=False, index=False, encoding='utf-8-sig')
+                df_existing = pd.read_csv(filepath, encoding='utf-8-sig')
+                if list(df_existing.columns) != expected_columns:
+                    # カラム変更があった場合：既存データにカラム追加して再保存
+                    for col in expected_columns:
+                        if col not in df_existing.columns:
+                            df_existing[col] = ''
+                    df_existing = df_existing[expected_columns]
+                    df_all = pd.concat([df_existing, df_new], ignore_index=True)
+                    df_all.to_csv(filepath, index=False, encoding='utf-8-sig')
+                else:
+                    df_new.to_csv(filepath, mode='a', header=False, index=False, encoding='utf-8-sig')
             else:
                 df_new.to_csv(filepath, index=False, encoding='utf-8-sig')
 
