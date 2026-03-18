@@ -59,6 +59,103 @@ class PaperTradingSimulator:
 
         return file_dates
 
+    def apply_filters(self, candidates_df, trade_date):
+        """
+        候補銘柄にフィルタを適用
+
+        Args:
+            candidates_df: 候補銘柄DataFrame
+            trade_date: 取引日（datetime）
+
+        Returns:
+            DataFrame: フィルタ後の候補銘柄
+        """
+        initial_count = len(candidates_df)
+        logger.info(f"フィルタ適用前: {initial_count}件")
+
+        # フィルタ1: material_strength フィルタ（'強'または'中'のみ）
+        if 'material_strength' in candidates_df.columns:
+            before_count = len(candidates_df)
+            candidates_df = candidates_df[
+                (candidates_df['material_strength'] == '強') |
+                (candidates_df['material_strength'] == '中')
+            ]
+            filtered_count = before_count - len(candidates_df)
+            if filtered_count > 0:
+                logger.info(f"フィルタ1 (材料強度): {filtered_count}件除外 (残り{len(candidates_df)}件)")
+
+        # フィルタ2: 超低位株除外（100円未満）
+        price_col = 'Close' if 'Close' in candidates_df.columns else 'C' if 'C' in candidates_df.columns else None
+        if price_col:
+            before_count = len(candidates_df)
+            candidates_df = candidates_df[candidates_df[price_col] >= 100]
+            filtered_count = before_count - len(candidates_df)
+            if filtered_count > 0:
+                logger.info(f"フィルタ2 (100円未満除外): {filtered_count}件除外 (残り{len(candidates_df)}件)")
+
+        # フィルタ3: 前日ストップ高除外（前日終値が前々日比+25%以上）
+        if 'Code' in candidates_df.columns:
+            filtered_codes = []
+            for idx, row in candidates_df.iterrows():
+                code = str(row['Code'])
+                if self.is_previous_day_limit_up(code, trade_date):
+                    filtered_codes.append(code)
+                    logger.info(f"フィルタ3 (前日ストップ高): {code} を除外")
+
+            if len(filtered_codes) > 0:
+                candidates_df = candidates_df[~candidates_df['Code'].astype(str).isin(filtered_codes)]
+                logger.info(f"フィルタ3 (前日ストップ高除外): {len(filtered_codes)}件除外 (残り{len(candidates_df)}件)")
+
+        logger.info(f"フィルタ適用後: {len(candidates_df)}件 (除外: {initial_count - len(candidates_df)}件)")
+        return candidates_df
+
+    def is_previous_day_limit_up(self, code, trade_date):
+        """
+        前日がストップ高だったか判定
+
+        Args:
+            code: 銘柄コード
+            trade_date: 取引日（datetime）
+
+        Returns:
+            bool: True=前日ストップ高（除外すべき）
+        """
+        try:
+            # 過去5営業日分を取得して前日・前々日を抽出
+            start_date = trade_date - timedelta(days=7)
+            df = self.jquants.get_daily_quotes(code=code, date=start_date)
+
+            if df is None or len(df) < 2:
+                # データ不足の場合はフィルタしない（保守的）
+                return False
+
+            # 日付でソート（新しい順）
+            df = df.sort_values('Date', ascending=False)
+
+            # 取引日より前のデータのみ抽出
+            df = df[df['Date'] < trade_date.strftime('%Y-%m-%d')]
+
+            # 前日と前々日の終値を取得
+            if len(df) >= 2:
+                prev_close_1 = df.iloc[0]['C']  # 前日終値
+                prev_close_2 = df.iloc[1]['C']  # 前々日終値
+
+                if pd.notna(prev_close_1) and pd.notna(prev_close_2) and prev_close_2 > 0:
+                    # 前日の上昇率を計算
+                    prev_day_change_pct = ((prev_close_1 - prev_close_2) / prev_close_2) * 100
+
+                    # +25%以上ならストップ高と判定
+                    if prev_day_change_pct >= 25.0:
+                        logger.debug(f"{code}: 前日ストップ高検出 (+{prev_day_change_pct:.1f}%)")
+                        return True
+
+            return False
+
+        except Exception as e:
+            logger.debug(f"{code}: 前日データ取得エラー: {e}")
+            # エラー時はフィルタしない（保守的）
+            return False
+
     def simulate_trade(self, code, entry_price, ohlcv):
         """
         1銘柄1日のトレードシミュレーション
@@ -141,6 +238,16 @@ class PaperTradingSimulator:
 
                 logger.info(f"{date_str}: 候補銘柄 {len(candidates_df)}件")
 
+                # 日付を datetime に変換
+                trade_date = datetime.strptime(date_str, '%Y%m%d')
+
+                # フィルタ適用
+                candidates_df = self.apply_filters(candidates_df, trade_date)
+
+                if len(candidates_df) == 0:
+                    logger.warning(f"{date_str}: フィルタ後の候補銘柄なし")
+                    continue
+
                 # 1日1銘柄集中: material_strength優先で選択
                 top_candidate = None
                 selection_reason = ""
@@ -176,9 +283,6 @@ class PaperTradingSimulator:
                     logger.warning(f"{date_str}: VolumeSurgeRatioカラムなし")
 
                 logger.info(f"{date_str}: 最上位銘柄を選択 ({selection_reason})")
-
-                # 日付を datetime に変換
-                trade_date = datetime.strptime(date_str, '%Y%m%d')
 
                 # 選択した1銘柄のみシミュレーション
                 code = str(top_candidate['Code'])

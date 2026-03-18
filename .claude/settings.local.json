@@ -6,7 +6,9 @@
       "Bash(ForEach-Object { Get-Content $_ullName -Tail 100)",
       "Bash(Select-String -Pattern \"保存完了|成功:|エラー:|候補銘柄なし|一括生成完了\" })",
       "Bash(Select-String -Pattern \"候補銘柄|既存ファイル|保存完了\" -Context 1)",
-      "Bash(Select-Object -First 20)"
+      "Bash(Select-Object -First 20)",
+      "Bash(powershell:*)",
+      "Bash(.\\venv\\Scripts\\python.exe:*)"
     ],
     "deny": [],
     "ask": []

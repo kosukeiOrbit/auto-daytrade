@@ -69,8 +69,11 @@ class MaterialJudge:
 直近ニュース・適時開示:
 {news_text}
 
-以下の判定基準に従って評価してください:
-- 決算発表から3営業日以上経過している場合、材料の鮮度が落ちている可能性を考慮すること
+【重要】以下の判定基準に従って評価してください:
+- **必ず銘柄名「{name}」に直接関連する材料のみを判定すること**
+- 他の銘柄（TOKYO BASE、ソニー等）の情報が含まれていても無視すること
+- 銘柄名が明示されていない一般的な市況・セクター情報は除外すること
+- 決算発表から3営業日以上経過している場合、strengthを「弱」寄りに評価すること
 - ニュースの日付が古い（1週間以上前）場合は、strengthを「弱」寄りに評価すること
 - 減益・業績悪化・ネガティブ材料は has_material=false とすること
 
@@ -104,6 +107,22 @@ class MaterialJudge:
                 content = content[:-3]  # ``` を削除
 
             result = json.loads(content.strip())
+
+            # 材料検証: 銘柄名との関連性チェック
+            if result['has_material'] and result.get('summary'):
+                # summaryに銘柄名の一部（最初の2-3文字）が含まれているか確認
+                # 例: 「クラシコム」→「クラシ」、「ソニー」→「ソニ」
+                name_prefix = name[:2] if len(name) >= 2 else name
+
+                # 銘柄名チェック（部分一致でOK）
+                # summaryに銘柄名が含まれていない場合、has_material=Falseに変更
+                if name_prefix not in result['summary'] and name not in result['summary']:
+                    logger.warning(
+                        f"{code} {name}: 材料が銘柄名と一致しない可能性があります "
+                        f"(要約: {result['summary']}) → has_material=Falseに変更"
+                    )
+                    result['has_material'] = False
+                    result['strength'] = '弱'
 
             logger.success(
                 f"{code} {name}: "
