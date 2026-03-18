@@ -119,7 +119,10 @@ class KabuClient:
 
     def get_symbol(self, symbol, exchange=1):
         """
-        銘柄情報を取得
+        銘柄情報を取得（時価情報・板情報）
+
+        注意: リアルタイム価格を取得するために /board エンドポイントを使用します。
+              /symbol エンドポイントは静的な銘柄情報のみで CurrentPrice は含まれません。
 
         Args:
             symbol: 銘柄コード (例: "7203")
@@ -143,7 +146,8 @@ class KabuClient:
         token = self.get_token()
 
         try:
-            url = f"{self.api_url}/symbol/{symbol}@{exchange}"
+            # リアルタイム価格取得には /board エンドポイントを使用
+            url = f"{self.api_url}/board/{symbol}@{exchange}"
             headers = {
                 "Content-Type": "application/json",
                 "X-API-KEY": token
@@ -152,17 +156,17 @@ class KabuClient:
             response = requests.get(url, headers=headers, timeout=10)
 
             if response.status_code == 200:
-                symbol_data = response.json()
+                board_data = response.json()
 
                 result = {
-                    'symbol': symbol_data.get('Symbol'),
-                    'symbol_name': symbol_data.get('SymbolName'),
-                    'current_price': symbol_data.get('CurrentPrice'),
-                    'bid_price': symbol_data.get('BidPrice'),
-                    'ask_price': symbol_data.get('AskPrice'),
-                    'trading_volume': symbol_data.get('TradingVolume'),
-                    'upper_limit': symbol_data.get('UpperLimit'),
-                    'lower_limit': symbol_data.get('LowerLimit')
+                    'symbol': board_data.get('Symbol'),
+                    'symbol_name': board_data.get('SymbolName'),
+                    'current_price': board_data.get('CurrentPrice'),
+                    'bid_price': board_data.get('BidPrice'),
+                    'ask_price': board_data.get('AskPrice'),
+                    'trading_volume': board_data.get('TradingVolume'),
+                    'upper_limit': board_data.get('UpperLimit'),
+                    'lower_limit': board_data.get('LowerLimit')
                 }
 
                 logger.info(f"銘柄情報取得成功: {result['symbol']} {result['symbol_name']} 現在値={result['current_price']}円")
