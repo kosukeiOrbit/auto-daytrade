@@ -344,7 +344,9 @@ class TradeExecutor:
                 'qty': qty,
                 'stop_price': stop_price,
                 'target_price': target_price,
-                'entry_time': datetime.now()
+                'entry_time': datetime.now(),
+                'material_strength': '',
+                'volume_surge': 0.0,
             }
 
             self.active_positions[symbol] = position_info
@@ -439,6 +441,9 @@ class TradeExecutor:
             position = self.entry_with_stop_and_target(symbol)
 
             if position:
+                # candidate情報をposition_infoに付与
+                position['material_strength'] = row.get('material_strength', '')
+                position['volume_surge'] = row.get('VolumeSurgeRatio', 0.0)
                 entry_count += 1
                 logger.success(f"{symbol}: エントリー成功 → 1日1銘柄ルールにより終了")
                 break  # 1銘柄エントリーしたら終了
@@ -492,6 +497,10 @@ class TradeExecutor:
                         price=0
                     )
 
+                    # トレード履歴保存
+                    entry_price = self.active_positions.get(symbol, {}).get('entry_price', 0)
+                    self.save_trade_history(symbol, entry_price, pos['current_price'], qty, '前場強制')
+
                     # Discord通知
                     self.notifier.send_trade_notification(
                         action="前場引け強制決済",
@@ -544,6 +553,11 @@ class TradeExecutor:
                     price=0
                 )
 
+                # トレード履歴保存
+                entry_price = self.active_positions.get(symbol, {}).get('entry_price', 0)
+                exit_reason = '大引強制'
+                self.save_trade_history(symbol, entry_price, pos['current_price'], qty, exit_reason)
+
                 # Discord通知
                 self.notifier.send_trade_notification(
                     action="大引け前強制決済",
@@ -560,13 +574,63 @@ class TradeExecutor:
         except Exception as e:
             logger.error(f"大引け前強制決済エラー: {e}")
 
+    def save_trade_history(self, symbol, entry_price, exit_price, qty, exit_reason):
+        """
+        トレード結果をCSVに追記保存
+
+        Args:
+            symbol: 銘柄コード
+            entry_price: エントリー価格
+            exit_price: 決済価格
+            qty: 株数
+            exit_reason: 決済理由（利確/損切/前場強制/大引強制）
+        """
+        try:
+            filepath = "data/trade_history.csv"
+            os.makedirs("data", exist_ok=True)
+
+            profit_loss = (exit_price - entry_price) * qty
+            profit_pct = (exit_price - entry_price) / entry_price * 100 if entry_price > 0 else 0
+
+            # active_positionsからcandidate情報を取得
+            pos_info = self.active_positions.get(symbol, {})
+            material_strength = pos_info.get('material_strength', '')
+            volume_surge = pos_info.get('volume_surge', 0.0)
+
+            record = {
+                'date': datetime.now().strftime('%Y%m%d'),
+                'code': symbol,
+                'entry_price': entry_price,
+                'exit_price': exit_price,
+                'qty': qty,
+                'profit_loss': round(profit_loss, 1),
+                'profit_pct': round(profit_pct, 4),
+                'exit_reason': exit_reason,
+                'material_strength': material_strength,
+                'volume_surge': round(volume_surge, 2),
+            }
+
+            df_new = pd.DataFrame([record])
+
+            # ファイルが存在すれば追記、なければ新規作成
+            if os.path.exists(filepath):
+                df_new.to_csv(filepath, mode='a', header=False, index=False, encoding='utf-8-sig')
+            else:
+                df_new.to_csv(filepath, index=False, encoding='utf-8-sig')
+
+            logger.info(f"トレード履歴保存: {symbol} {exit_reason} {profit_loss:+,.0f}円 → {filepath}")
+
+        except Exception as e:
+            logger.error(f"トレード履歴保存エラー: {e}")
+
     def monitor_positions(self):
         """
         保有ポジションを監視
-        決済済みポジションの損益を集計
+        決済済みポジション（逆指値/指値で自動約定）を検知してトレード履歴に保存
         """
         try:
             positions = self.kabu_client.get_positions()
+            current_symbols = {pos['symbol'] for pos in positions}
 
             logger.info(f"保有ポジション: {len(positions)}件")
 
@@ -574,11 +638,39 @@ class TradeExecutor:
                 symbol = pos['symbol']
                 profit_loss = pos['profit_loss']
                 profit_loss_rate = pos['profit_loss_rate']
-
                 logger.info(f"{symbol}: 損益={profit_loss:,.0f}円 ({profit_loss_rate:+.2f}%)")
 
-                # 決済済みの場合（ポジションがアクティブリストにあるが保有ポジションに存在しない）
-                # → 損益を集計し、連敗カウントを更新
+            # 決済済みポジション検知（active_positionsにあるがAPIのポジションにない）
+            closed_symbols = []
+            for symbol, pos_info in list(self.active_positions.items()):
+                if symbol not in current_symbols:
+                    # 自動決済された（逆指値or指値が約定）
+                    entry_price = pos_info.get('entry_price', 0)
+                    qty = pos_info.get('qty', 0)
+                    stop_price = pos_info.get('stop_price', 0)
+                    target_price = pos_info.get('target_price', 0)
+
+                    # 決済理由の推定（損切りか利確か）
+                    # 最新の約定価格が取れない場合、stop/targetとの距離で判定
+                    # → 保守的にstop_priceで損切りと仮定し、後で実際の約定価格で補正
+                    exit_reason = '損切り'
+                    exit_price = stop_price
+
+                    # 利確の可能性チェック（target_priceに近い場合）
+                    if target_price > 0 and entry_price > 0:
+                        # 利確ラインは+2%、損切りは-1%
+                        # target到達の方が有利なので利確と判定
+                        if profit_loss_rate is not None and profit_loss_rate > 0:
+                            exit_reason = '利確'
+                            exit_price = target_price
+
+                    self.save_trade_history(symbol, entry_price, exit_price, qty, exit_reason)
+                    closed_symbols.append(symbol)
+                    logger.info(f"{symbol}: 自動決済検知 → {exit_reason} トレード履歴保存")
+
+            # 決済済みポジションをactive_positionsから削除
+            for symbol in closed_symbols:
+                del self.active_positions[symbol]
 
         except Exception as e:
             logger.error(f"ポジション監視エラー: {e}")

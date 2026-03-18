@@ -152,6 +152,12 @@ def trading_loop(executor, notifier=None):
                 if notifier:
                     notifier.send_error(f"⚠️ 大引け前決済失敗: {e}\nポジションを手動確認してください")
 
+        # ポジション監視（逆指値/指値の自動約定を検知→トレード履歴保存）
+        try:
+            executor.monitor_positions()
+        except Exception as e:
+            logger.debug(f"ポジション監視エラー: {e}")
+
         # 1分待機
         time.sleep(60)
 
