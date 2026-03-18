@@ -24,8 +24,47 @@ class PaperTradingSimulator:
         self.jquants = JQuantsClient()
         self.notifier = DiscordNotifier()
         self.trades = []  # 個別トレード結果
+        self._daily_cache = {}  # 日付→全銘柄DataFrameのキャッシュ
+        self._failed_dates = set()  # API取得失敗した日付（再試行しない）
 
         logger.info("ペーパートレードシミュレーター初期化")
+
+    def _get_all_prices_for_date(self, date):
+        """
+        指定日の全銘柄データを取得（キャッシュ利用、失敗日はスキップ）
+
+        Args:
+            date: datetime
+
+        Returns:
+            DataFrame or None
+        """
+        date_str = date.strftime('%Y-%m-%d')
+        if date_str in self._daily_cache:
+            return self._daily_cache[date_str]
+        if date_str in self._failed_dates:
+            return None
+
+        # まずキャッシュから取得を試みる（APIは呼ばない）
+        cache_manager = self.jquants.cache_manager
+        if cache_manager:
+            cached_data = cache_manager.get_prices_cache(date)
+            if cached_data is not None:
+                self._daily_cache[date_str] = cached_data
+                return cached_data
+
+        # キャッシュがない場合はAPIから取得を試みる
+        try:
+            df = self.jquants.get_daily_quotes(date=date)
+            if df is not None and len(df) > 0:
+                self._daily_cache[date_str] = df
+                return df
+            else:
+                self._failed_dates.add(date_str)
+                return None
+        except Exception:
+            self._failed_dates.add(date_str)
+            return None
 
     def load_candidate_files(self):
         """
@@ -102,7 +141,7 @@ class PaperTradingSimulator:
 
     def is_previous_day_limit_up(self, code, trade_date):
         """
-        前日がストップ高だったか判定
+        前日がストップ高だったか判定（キャッシュ済み全銘柄データを利用）
 
         Args:
             code: 銘柄コード
@@ -112,39 +151,37 @@ class PaperTradingSimulator:
             bool: True=前日ストップ高（除外すべき）
         """
         try:
-            # 過去5営業日分を取得して前日・前々日を抽出
-            start_date = trade_date - timedelta(days=7)
-            df = self.jquants.get_daily_quotes(code=code, date=start_date)
+            # 前日・前々日の全銘柄データをキャッシュから取得
+            # 過去数日を遡って2営業日分を見つける
+            prev_days_data = []
+            for days_back in range(1, 8):
+                check_date = trade_date - timedelta(days=days_back)
+                df = self._get_all_prices_for_date(check_date)
+                if df is not None and len(df) > 0:
+                    # 該当銘柄のデータを抽出
+                    code_str = str(code)
+                    code_data = df[df['Code'].astype(str).str.startswith(code_str)]
+                    if len(code_data) > 0:
+                        prev_days_data.append(code_data.iloc[0])
+                    if len(prev_days_data) >= 2:
+                        break
 
-            if df is None or len(df) < 2:
-                # データ不足の場合はフィルタしない（保守的）
+            if len(prev_days_data) < 2:
                 return False
 
-            # 日付でソート（新しい順）
-            df = df.sort_values('Date', ascending=False)
+            prev_close_1 = prev_days_data[0]['C']  # 前日終値
+            prev_close_2 = prev_days_data[1]['C']  # 前々日終値
 
-            # 取引日より前のデータのみ抽出
-            df = df[df['Date'] < trade_date.strftime('%Y-%m-%d')]
-
-            # 前日と前々日の終値を取得
-            if len(df) >= 2:
-                prev_close_1 = df.iloc[0]['C']  # 前日終値
-                prev_close_2 = df.iloc[1]['C']  # 前々日終値
-
-                if pd.notna(prev_close_1) and pd.notna(prev_close_2) and prev_close_2 > 0:
-                    # 前日の上昇率を計算
-                    prev_day_change_pct = ((prev_close_1 - prev_close_2) / prev_close_2) * 100
-
-                    # +25%以上ならストップ高と判定
-                    if prev_day_change_pct >= 25.0:
-                        logger.debug(f"{code}: 前日ストップ高検出 (+{prev_day_change_pct:.1f}%)")
-                        return True
+            if pd.notna(prev_close_1) and pd.notna(prev_close_2) and prev_close_2 > 0:
+                prev_day_change_pct = ((prev_close_1 - prev_close_2) / prev_close_2) * 100
+                if prev_day_change_pct >= 25.0:
+                    logger.debug(f"{code}: 前日ストップ高検出 (+{prev_day_change_pct:.1f}%)")
+                    return True
 
             return False
 
         except Exception as e:
             logger.debug(f"{code}: 前日データ取得エラー: {e}")
-            # エラー時はフィルタしない（保守的）
             return False
 
     def simulate_trade(self, code, entry_price, ohlcv):
@@ -329,7 +366,7 @@ class PaperTradingSimulator:
 
     def get_daily_ohlcv(self, code, date):
         """
-        指定日の日足OHLCVデータを取得
+        指定日の日足OHLCVデータを取得（キャッシュ済み全銘柄データを利用）
 
         Args:
             code: 銘柄コード
@@ -339,17 +376,19 @@ class PaperTradingSimulator:
             pd.Series: OHLCV or None
         """
         try:
-            # レート制限対策: 1.5秒待機（40リクエスト/分）
-            time.sleep(1.5)
-
-            # J-Quants APIから当日の株価データを取得
-            df = self.jquants.get_daily_quotes(code=code, date=date)
+            df = self._get_all_prices_for_date(date)
 
             if df is None or len(df) == 0:
                 return None
 
-            # 最初の行を返す（通常1銘柄1日分）
-            row = df.iloc[0]
+            # 該当銘柄のデータを抽出
+            code_str = str(code)
+            code_data = df[df['Code'].astype(str).str.startswith(code_str)]
+
+            if len(code_data) == 0:
+                return None
+
+            row = code_data.iloc[0]
 
             # J-Quants APIのカラム名: O, H, L, C, Vo
             result = pd.Series({

@@ -208,16 +208,16 @@ def filter_volume_surge(df_day, df_all, listed_info, surge_threshold=2.0, lookba
 def main():
     """メイン処理"""
     logger.info("=" * 60)
-    logger.info("過去60営業日分のcandidates CSV一括生成（API効率化版）")
+    logger.info("過去120営業日分のcandidates CSV一括生成（キャッシュ利用版）")
     logger.info("=" * 60)
 
     # 日本時間
     jst = tz.gettz("Asia/Tokyo")
     now = datetime.now(jst)
 
-    # 過去240営業日を取得（約1年間）
+    # 過去120営業日を取得（約6ヶ月間）
     logger.info("営業日リストを生成中...")
-    business_days = get_business_days(now, num_days=240)
+    business_days = get_business_days(now, num_days=120)
     logger.info(f"対象期間: {business_days[0].strftime('%Y-%m-%d')} ～ {business_days[-1].strftime('%Y-%m-%d')}")
 
     # STEP 1: J-Quants APIクライアント初期化
@@ -233,11 +233,11 @@ def main():
 
     # STEP 2: 株価データを日付ごとに順次取得（レート制限対策）
     logger.info("\n" + "=" * 60)
-    logger.info("STEP 2: 株価データ取得（240営業日分、順次実行）")
+    logger.info("STEP 2: 株価データ取得（120営業日分、キャッシュ利用）")
     logger.info("=" * 60)
 
     logger.info(f"期間: {business_days[0].strftime('%Y-%m-%d')} ～ {business_days[-1].strftime('%Y-%m-%d')}")
-    logger.info("日付ごとに順次取得中... (240リクエスト、約4分)")
+    logger.info("日付ごとに順次取得中... (120リクエスト、キャッシュから高速取得)")
 
     df_all_list = []
 
@@ -245,10 +245,8 @@ def main():
         try:
             logger.info(f"  [{i}/{len(business_days)}] {date.strftime('%Y-%m-%d')} 取得中...")
 
-            # 1日分の全銘柄データを取得
-            df_day = jquants.client.get_eq_bars_daily(
-                date_yyyymmdd=date.strftime('%Y-%m-%d')
-            )
+            # 1日分の全銘柄データを取得（キャッシュ対応）
+            df_day = jquants.get_daily_quotes(date=date)
 
             if df_day is not None and len(df_day) > 0:
                 df_all_list.append(df_day)
