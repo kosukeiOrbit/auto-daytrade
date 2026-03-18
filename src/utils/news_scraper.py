@@ -5,6 +5,10 @@ import requests
 from bs4 import BeautifulSoup
 from loguru import logger
 import time
+from datetime import datetime, timedelta
+from dateutil import tz
+import re
+import jpholiday
 
 
 class NewsScraper:
@@ -17,13 +21,79 @@ class NewsScraper:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
 
-    def get_stock_news(self, code, max_articles=5):
+    def _get_previous_business_day(self, date):
         """
-        銘柄の最新ニュースを取得
+        直前の営業日を取得（土日祝日を除外）
+
+        Args:
+            date: 基準日 (datetime)
+
+        Returns:
+            datetime: 直前の営業日
+        """
+        prev_date = date - timedelta(days=1)
+        while prev_date.weekday() >= 5 or jpholiday.is_holiday(prev_date):
+            prev_date -= timedelta(days=1)
+        return prev_date
+
+    def _parse_news_date(self, date_text):
+        """
+        ニュース日付テキストをパース
+
+        Args:
+            date_text: 日付文字列（例: "26/03/17 16:41", "26/03/16 15:30"）
+
+        Returns:
+            datetime or None: パース成功時はdatetimeオブジェクト、失敗時はNone
+        """
+        try:
+            # "26/03/17 16:41" 形式をパース
+            match = re.match(r'(\d{2})/(\d{2})/(\d{2})\s+(\d{2}):(\d{2})', date_text)
+            if match:
+                year, month, day, hour, minute = match.groups()
+                # 年は20xxと仮定
+                full_year = 2000 + int(year)
+                jst = tz.gettz('Asia/Tokyo')
+                return datetime(full_year, int(month), int(day), int(hour), int(minute), tzinfo=jst)
+            return None
+        except Exception as e:
+            logger.debug(f"日付パースエラー: {date_text} - {e}")
+            return None
+
+    def _is_news_fresh(self, news_date, reference_date=None):
+        """
+        ニュースが鮮度範囲内かチェック
+
+        Args:
+            news_date: ニュース日時 (datetime)
+            reference_date: 基準日時 (datetime)。Noneの場合は現在時刻
+
+        Returns:
+            bool: True=鮮度範囲内（採用）、False=古い（除外）
+        """
+        if news_date is None:
+            # パース失敗時は採用（安全側）
+            return True
+
+        jst = tz.gettz('Asia/Tokyo')
+        if reference_date is None:
+            reference_date = datetime.now(jst)
+
+        # 直前の営業日15:30を基準時刻とする
+        prev_business_day = self._get_previous_business_day(reference_date)
+        cutoff_time = prev_business_day.replace(hour=15, minute=30, second=0, microsecond=0, tzinfo=jst)
+
+        # ニュース日時がカットオフ時刻以降なら採用
+        return news_date >= cutoff_time
+
+    def get_stock_news(self, code, max_articles=5, reference_date=None):
+        """
+        銘柄の最新ニュースを取得（鮮度フィルタ付き）
 
         Args:
             code: 銘柄コード（文字列）
             max_articles: 取得する記事数（デフォルト5）
+            reference_date: 基準日時（Noneの場合は現在時刻）
 
         Returns:
             str: ニューステキスト（改行区切り）
@@ -63,6 +133,7 @@ class NewsScraper:
             exclude_categories = ['テク', '特集', '注目', '市況']
 
             news_texts = []
+            filtered_count = 0
             for row in rows:
                 cells = row.find_all('td')
                 if len(cells) >= 3:
@@ -72,6 +143,13 @@ class NewsScraper:
 
                     # 除外カテゴリをスキップ
                     if category_text in exclude_categories:
+                        continue
+
+                    # 日付パースして鮮度チェック
+                    news_date = self._parse_news_date(date_text)
+                    if not self._is_news_fresh(news_date, reference_date):
+                        filtered_count += 1
+                        logger.debug(f"{code}: 古いニュースを除外 [{date_text}]")
                         continue
 
                     # タイトルを含むセルを探す（aタグを含むセル）
@@ -92,9 +170,9 @@ class NewsScraper:
             combined_text = "\n".join(news_texts)
 
             if combined_text:
-                logger.success(f"{code}: ニュース{len(news_texts)}件取得")
+                logger.success(f"{code}: ニュース{len(news_texts)}件取得 (古いニュース{filtered_count}件除外)")
             else:
-                logger.warning(f"{code}: ニューステキストなし")
+                logger.warning(f"{code}: ニューステキストなし (古いニュース{filtered_count}件除外)")
 
             # レート制限対策（連続アクセス防止）
             time.sleep(0.5)

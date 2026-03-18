@@ -185,8 +185,9 @@ def main():
         # 会社名取得
         company_name = news_scraper.get_company_name(code)
 
-        # ニュース取得
-        news_text = news_scraper.get_stock_news(code, max_articles=3)
+        # ニュース取得（鮮度フィルタ適用）
+        # 実行日時（now）を基準として、前営業日15:30以降のニュースのみ取得
+        news_text = news_scraper.get_stock_news(code, max_articles=3, reference_date=now)
 
         news_data[code] = {
             'company_name': company_name,
