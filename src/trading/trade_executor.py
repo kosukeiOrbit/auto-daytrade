@@ -153,18 +153,24 @@ class TradeExecutor:
             # エラー時はフィルタしない（保守的）
             return False
 
-    def check_entry_signal(self, symbol):
+    def check_entry_signal(self, symbol, pre_open=False):
         """
         エントリーシグナルをチェック
 
         Args:
             symbol: 銘柄コード
+            pre_open: True=寄前エントリー（現在値チェックスキップ）
 
         Returns:
             bool: エントリー可能な場合True
         """
+        # 寄前（8:45）の寄成注文は現在値不要
+        if pre_open:
+            logger.info(f"{symbol}: 寄前エントリー（現在値チェックスキップ）")
+            return True
+
         try:
-            # 銘柄情報を取得
+            # 銘柄情報を取得（パターンB等、場中エントリー用）
             symbol_info = self.kabu_client.get_symbol(symbol)
 
             # 現在値が取得できない場合はスキップ
@@ -433,8 +439,8 @@ class TradeExecutor:
 
             logger.info(f"\n[エントリー候補] {symbol} ({row['material_strength']}, 出来高{row['VolumeSurgeRatio']:.2f}倍)")
 
-            # エントリーシグナルチェック
-            if not self.check_entry_signal(symbol):
+            # エントリーシグナルチェック（寄成注文のため現在値チェックスキップ）
+            if not self.check_entry_signal(symbol, pre_open=True):
                 logger.info(f"{symbol}: エントリー条件不適合 → 次の候補へ")
                 continue
 
