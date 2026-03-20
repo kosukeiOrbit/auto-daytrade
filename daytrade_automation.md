@@ -30,7 +30,7 @@
 | 発注API | kabuステーションAPI（三菱UFJ eスマート証券） | 無料 |
 | 株価データ | J-Quants API Lightプラン | 月1,650円 |
 | 適時開示 | TDnet Webスクレイピング | 無料 |
-| 地合いチェック | yfinance（^DJI・^IXIC） | 無料 |
+| 地合いチェック | yfinance（日経先物優先・NYダウ/ナスダックフォールバック） | 無料 |
 | 材料判定 | Anthropic Claude API（claude-sonnet） | 月約300円 |
 | 通知 | Discord Webhook | 無料 |
 | 開発環境 | Claude Code | 月$20〜$100 |
@@ -178,7 +178,7 @@ data/candidates_YYYYMMDD.csv
 ```
 朝レポート送信：
   - 本日の投資予算
-  - 地合い（NYダウ・ナスダック前日比）
+  - 地合い（日経先物 / フォールバック時はNYダウ・ナスダック）
   - 最終候補銘柄一覧（強度・出来高倍率・材料サマリー）
   - TDnet開示件数
 ```
