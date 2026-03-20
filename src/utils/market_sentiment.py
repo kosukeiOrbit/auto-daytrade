@@ -1,5 +1,5 @@
 """
-市場センチメント取得（NYダウ・ナスダック終値）
+市場センチメント取得（日経先物・NYダウ・ナスダック）
 yfinance ライブラリ使用
 """
 import yfinance as yf
@@ -15,10 +15,32 @@ class MarketSentiment:
         """初期化"""
         pass
 
+    def get_nikkei_futures(self):
+        """
+        日経先物の直近変化率を取得
+
+        Returns:
+            dict: {'close': float, 'change_pct': float} or None
+        """
+        logger.info("日経先物データ取得中 (yfinance)...")
+
+        # 複数シンボルを試行（yfinanceの日経先物シンボルは不安定なため）
+        symbols = ['NKD=F', '^N225']
+        for symbol in symbols:
+            try:
+                data = self._fetch_yfinance(symbol, max_retries=2, retry_delay=2)
+                logger.success(f"日経先物取得成功 ({symbol}): {data['close']:.0f} ({data['change_pct']:+.2f}%)")
+                return data
+            except Exception as e:
+                logger.debug(f"{symbol} 取得失敗: {e}")
+                continue
+
+        logger.warning("日経先物データ取得失敗（全シンボル）")
+        return None
+
     def get_us_market_close(self, date=None):
         """
         米国市場終値を取得（NYダウ・ナスダック）
-        yfinance ライブラリを使用
 
         Args:
             date: 対象日（datetime）。Noneの場合は前営業日
@@ -35,16 +57,12 @@ class MarketSentiment:
         if date is None:
             date = datetime.now()
 
-        # 前営業日を取得（米国時間基準）
         target_date = date - timedelta(days=1)
 
         logger.info(f"米国市場終値取得 (yfinance): {target_date.strftime('%Y-%m-%d')}")
 
         try:
-            # NYダウ（^DJI）を取得
             dow_data = self._fetch_yfinance('^DJI')
-
-            # ナスダック（^IXIC）を取得
             nasdaq_data = self._fetch_yfinance('^IXIC')
 
             result = {
@@ -71,7 +89,7 @@ class MarketSentiment:
         yfinanceからOHLCVデータを取得（リトライ機能付き）
 
         Args:
-            symbol: シンボル（例: ^DJI, ^IXIC）
+            symbol: シンボル（例: ^DJI, ^IXIC, NKD=F）
             max_retries: 最大リトライ回数（デフォルト3回）
             retry_delay: リトライ間隔（秒、デフォルト2秒）
 
@@ -81,16 +99,12 @@ class MarketSentiment:
         last_error = None
         for attempt in range(max_retries):
             try:
-                # yfinanceでティッカーを取得
                 ticker = yf.Ticker(symbol)
-
-                # 直近5営業日のデータを取得（余裕を持って）
                 hist = ticker.history(period="5d")
 
                 if hist is None or len(hist) < 2:
                     raise ValueError(f"十分なデータが取得できませんでした: {symbol}")
 
-                # 最新2営業日の終値を取得
                 close_prices = hist['Close'].dropna()
 
                 if len(close_prices) < 2:
@@ -120,24 +134,44 @@ class MarketSentiment:
                     logger.error(f"{symbol} 取得失敗 ({max_retries}回試行): {e}")
                     raise last_error
 
-    def check_market_sentiment(self, dow_change_pct, nasdaq_change_pct, threshold=-2.0):
+    def check_market_sentiment(self, nikkei_change_pct=None, dow_change_pct=None, nasdaq_change_pct=None, threshold=-1.5):
         """
         地合いをチェックしてスキップ判定
 
         Args:
+            nikkei_change_pct: 日経先物変化率（%）。Noneの場合はフォールバック判定
             dow_change_pct: NYダウ変化率（%）
             nasdaq_change_pct: ナスダック変化率（%）
-            threshold: スキップ閾値（デフォルト-2.0%）
+            threshold: スキップ閾値（デフォルト-1.5%）
 
         Returns:
-            str: 'skip_all' | 'volume_only' | 'normal'
+            dict: {
+                'status': 'skip_all' | 'normal',
+                'message': str  # Discord通知用テキスト
+            }
         """
-        if dow_change_pct < threshold and nasdaq_change_pct < threshold:
-            logger.warning(f"地合い悪化: NYダウ{dow_change_pct:.2f}%, ナスダック{nasdaq_change_pct:.2f}% → 全スキップ")
-            return 'skip_all'
-        elif dow_change_pct < threshold or nasdaq_change_pct < threshold:
-            logger.warning(f"地合いやや悪化: 出来高急増銘柄のみ対象")
-            return 'volume_only'
-        else:
-            logger.success("地合い良好: 通常通り処理")
-            return 'normal'
+        # メインチェック: 日経先物
+        if nikkei_change_pct is not None:
+            if nikkei_change_pct < threshold:
+                msg = f"⚠️スキップ / 日経先物 {nikkei_change_pct:+.1f}%（閾値{threshold}%超え）"
+                logger.warning(f"地合い悪化: {msg}")
+                return {'status': 'skip_all', 'message': msg}
+            else:
+                msg = f"正常 / 日経先物 {nikkei_change_pct:+.1f}%"
+                logger.success(f"地合い良好: {msg}")
+                return {'status': 'normal', 'message': msg}
+
+        # フォールバック: NYダウ・ナスダック
+        if dow_change_pct is not None and nasdaq_change_pct is not None:
+            if dow_change_pct < threshold and nasdaq_change_pct < threshold:
+                msg = f"⚠️スキップ / NYダウ {dow_change_pct:+.1f}% / ナスダック {nasdaq_change_pct:+.1f}%（日経先物取得失敗）"
+                logger.warning(f"地合い悪化: {msg}")
+                return {'status': 'skip_all', 'message': msg}
+            else:
+                msg = f"正常 / NYダウ {dow_change_pct:+.1f}% / ナスダック {nasdaq_change_pct:+.1f}%（日経先物取得失敗）"
+                logger.success(f"地合い: {msg}")
+                return {'status': 'normal', 'message': msg}
+
+        # すべて取得失敗
+        logger.error("地合いデータ全取得失敗 → 通常通り処理")
+        return {'status': 'normal', 'message': 'データ取得失敗（通常通り処理）'}

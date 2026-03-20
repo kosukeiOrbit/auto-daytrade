@@ -50,14 +50,14 @@ class DiscordNotifier:
             logger.error(f"Discord通知送信エラー: {e}")
             return False
 
-    def send_morning_report(self, candidates_df, judgments, sentiment=None, tdnet_count=0, budget=None):
+    def send_morning_report(self, candidates_df, judgments, sentiment_message='', tdnet_count=0, budget=None):
         """
         朝のスクリーニング結果を送信
 
         Args:
             candidates_df: 候補銘柄DataFrame
             judgments: Claude判定結果（dict: {code: judgment}）
-            sentiment: 地合い情報（dict or None）
+            sentiment_message: 地合い判定メッセージ（str）
             tdnet_count: TDnet開示件数（int）
             budget: 本日の投資予算（int、オプション）
         """
@@ -78,16 +78,7 @@ class DiscordNotifier:
         content += f"✅ 候補: {material_count}銘柄（材料あり）\n"
 
         # 地合い・TDnet情報
-        sentiment_status = "正常"
-        if sentiment:
-            dow_change = sentiment.get('dow_change_pct', 0)
-            nasdaq_change = sentiment.get('nasdaq_change_pct', 0)
-            if dow_change < -2.0 or nasdaq_change < -2.0:
-                sentiment_status = f"やや悪化 (ダウ{dow_change:+.1f}% / ナス{nasdaq_change:+.1f}%)"
-        else:
-            sentiment_status = "データ取得失敗"
-
-        content += f"地合い: {sentiment_status} / TDnet開示: {tdnet_count}件\n\n"
+        content += f"地合い: {sentiment_message} / TDnet開示: {tdnet_count}件\n\n"
 
         # 上位5銘柄（材料ありのみ）
         rank = 0

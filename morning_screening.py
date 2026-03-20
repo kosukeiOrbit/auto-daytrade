@@ -105,7 +105,7 @@ def main():
         notifier.send_morning_report(
             candidates_df=pd.DataFrame(),
             judgments={},
-            sentiment=None,
+            sentiment_message='未チェック（候補なし）',
             tdnet_count=0,
             budget=budget
         )
@@ -202,35 +202,52 @@ def main():
     else:
         logger.info("TDnet銘柄: 全て出来高急増リストに含まれている、または開示なし")
 
-    # STEP 2: 地合いチェック
+    # STEP 2: 地合いチェック（日経先物 → NYダウ・ナスダック フォールバック）
     logger.info("\n" + "=" * 60)
-    logger.info("STEP 2: 地合いチェック（NYダウ・ナスダック）")
+    logger.info("STEP 2: 地合いチェック")
     logger.info("=" * 60)
 
     sentiment = MarketSentiment()
-    # target_date（日本の前営業日）を渡して、対応する米国市場の終値を取得
-    us_market = sentiment.get_us_market_close(date=target_date)
 
-    if us_market is None:
-        logger.warning("米国市場データ取得失敗 → 地合いチェックスキップ")
-        market_status = 'normal'
-    else:
-        market_status = sentiment.check_market_sentiment(
-            us_market['dow_change_pct'],
-            us_market['nasdaq_change_pct'],
-            threshold=-2.0
-        )
+    # 日経先物を取得（メイン指標）
+    nikkei_futures = sentiment.get_nikkei_futures()
+    nikkei_change_pct = nikkei_futures['change_pct'] if nikkei_futures else None
+
+    # NYダウ・ナスダックを取得（フォールバック用）
+    us_market = sentiment.get_us_market_close(date=target_date)
+    dow_change_pct = us_market['dow_change_pct'] if us_market else None
+    nasdaq_change_pct = us_market['nasdaq_change_pct'] if us_market else None
+
+    # 地合い判定
+    sentiment_result = sentiment.check_market_sentiment(
+        nikkei_change_pct=nikkei_change_pct,
+        dow_change_pct=dow_change_pct,
+        nasdaq_change_pct=nasdaq_change_pct,
+        threshold=-1.5
+    )
+    market_status = sentiment_result['status']
+    sentiment_message = sentiment_result['message']
+
+    logger.info(f"地合い判定: {sentiment_message}")
 
     # 地合いによる候補絞り込み
     if market_status == 'skip_all':
         logger.error("地合い悪化のため全スキップします")
+
+        # Discord通知（地合い悪化で終了）
+        notifier = DiscordNotifier()
+        notifier.send_morning_report(
+            candidates_df=pd.DataFrame(),
+            judgments={},
+            sentiment_message=sentiment_message,
+            tdnet_count=len(tdnet_codes),
+            budget=budget
+        )
+
         logger.info("=" * 60)
         logger.info("朝スクリーニング終了（地合い悪化）")
         logger.info("=" * 60)
         return
-    elif market_status == 'volume_only':
-        logger.warning("地合いやや悪化: 出来高急増銘柄のみ対象（TDnet銘柄は除外）")
-        # 現時点ではTDnet銘柄がないため、そのまま継続
 
     # STEP 3: ニュース取得（株探スクレイピング）
     logger.info("\n" + "=" * 60)
@@ -387,7 +404,7 @@ def main():
     notifier.send_morning_report(
         candidates_df=candidates,
         judgments=judgments,
-        sentiment=us_market,
+        sentiment_message=sentiment_message,
         tdnet_count=len(tdnet_codes),
         budget=budget
     )
