@@ -389,4 +389,4 @@ data/candidates_YYYYMMDD.csv
 | 2026-03-20 | 寄前エントリーの現在値チェックスキップ修正（3/19エントリー0件の原因） |
 | 2026-03-20 | 地合いチェック改善: 日経先物を主指標に変更、閾値-2%→-1.5% |
 | 2026-03-20 | パターンBエントリーロジック実装（PATTERN_B_ENABLED=Falseで無効化中） |
-| 2026-03-20 | trade_history.csvに分析カラム追加（MFE/MAE/VWAP比/寄り乖離/保有時間） |
+| 2026-03-20 | trade_history.csvに分析カラム追加（MFE/MAE/VWAP比/寄り乖離/保有時間/material_type/opening_gap） |

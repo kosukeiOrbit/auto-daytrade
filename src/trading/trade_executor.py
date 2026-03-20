@@ -361,12 +361,14 @@ class TradeExecutor:
                 'target_price': target_price,
                 'entry_time': datetime.now(),
                 'material_strength': '',
+                'material_type': '',
                 'volume_surge': 0.0,
                 'entry_pattern': 'A',
                 'mfe_pct': 0.0,
                 'mae_pct': 0.0,
                 'entry_vwap_ratio': round(entry_vwap_ratio, 4) if entry_vwap_ratio is not None else None,
                 'entry_gap_pct': round(entry_gap_pct, 4) if entry_gap_pct is not None else None,
+                'opening_gap_pct': None,  # execute_daily_tradingで上書き
             }
 
             self.active_positions[symbol] = position_info
@@ -463,7 +465,17 @@ class TradeExecutor:
             if position:
                 # candidate情報をposition_infoに付与
                 position['material_strength'] = row.get('material_strength', '')
+                position['material_type'] = row.get('material_type', '')
                 position['volume_surge'] = row.get('VolumeSurgeRatio', 0.0)
+
+                # opening_gap_pct: エントリー価格 ÷ 前日終値 - 1（%）
+                prev_close = row.get('C') or row.get('Close') or 0
+                entry_price = position.get('entry_price', 0)
+                if prev_close and prev_close > 0 and entry_price > 0:
+                    position['opening_gap_pct'] = round((entry_price / prev_close - 1) * 100, 4)
+                else:
+                    position['opening_gap_pct'] = None
+
                 entry_count += 1
                 logger.success(f"{symbol}: エントリー成功 → 1日1銘柄ルールにより終了")
                 break  # 1銘柄エントリーしたら終了
@@ -615,6 +627,7 @@ class TradeExecutor:
             # active_positionsからcandidate情報を取得
             pos_info = self.active_positions.get(symbol, {})
             material_strength = pos_info.get('material_strength', '')
+            material_type = pos_info.get('material_type', '')
             volume_surge = pos_info.get('volume_surge', 0.0)
 
             entry_time_obj = pos_info.get('entry_time')
@@ -630,9 +643,10 @@ class TradeExecutor:
             mfe_pct = round(pos_info.get('mfe_pct', 0), 4)
             mae_pct = round(pos_info.get('mae_pct', 0), 4)
 
-            # VWAP比・寄り乖離率
+            # VWAP比・寄り乖離率・寄りギャップ
             entry_vwap_ratio = pos_info.get('entry_vwap_ratio', '')
             entry_gap_pct = pos_info.get('entry_gap_pct', '')
+            opening_gap_pct = pos_info.get('opening_gap_pct', '')
 
             record = {
                 'date': datetime.now().strftime('%Y%m%d'),
@@ -644,6 +658,7 @@ class TradeExecutor:
                 'profit_pct': round(profit_pct, 4),
                 'exit_reason': exit_reason,
                 'material_strength': material_strength,
+                'material_type': material_type,
                 'volume_surge': round(volume_surge, 2),
                 'entry_time': entry_time_str,
                 'entry_pattern': entry_pattern,
@@ -653,6 +668,7 @@ class TradeExecutor:
                 'mae_pct': mae_pct,
                 'entry_vwap_ratio': entry_vwap_ratio if entry_vwap_ratio is not None else '',
                 'entry_gap_pct': entry_gap_pct if entry_gap_pct is not None else '',
+                'opening_gap_pct': opening_gap_pct if opening_gap_pct is not None else '',
             }
 
             df_new = pd.DataFrame([record])
@@ -935,12 +951,14 @@ class TradeExecutor:
                 'target_price': target_price,
                 'entry_time': datetime.now(),
                 'material_strength': '',
+                'material_type': '',
                 'volume_surge': 0.0,
                 'entry_pattern': 'B',
                 'mfe_pct': 0.0,
                 'mae_pct': 0.0,
                 'entry_vwap_ratio': round(entry_vwap_ratio, 4) if entry_vwap_ratio is not None else None,
                 'entry_gap_pct': round(entry_gap_pct, 4) if entry_gap_pct is not None else None,
+                'opening_gap_pct': round(entry_gap_pct, 4) if entry_gap_pct is not None else None,
             }
 
             self.active_positions[symbol] = position_info
