@@ -344,6 +344,12 @@ class TradeExecutor:
 
             target_order_id = target_result['order_id'] if target_result['result_code'] == 0 else None
 
+            # エントリー時のVWAP・始値を取得（分析用）
+            entry_vwap = symbol_info.get('vwap')
+            entry_opening = symbol_info.get('opening_price')
+            entry_vwap_ratio = ((current_price / entry_vwap) - 1) * 100 if entry_vwap and entry_vwap > 0 else None
+            entry_gap_pct = ((current_price / entry_opening) - 1) * 100 if entry_opening and entry_opening > 0 else None
+
             # ポジション情報を保存
             position_info = {
                 'entry_order_id': entry_order_id,
@@ -357,6 +363,10 @@ class TradeExecutor:
                 'material_strength': '',
                 'volume_surge': 0.0,
                 'entry_pattern': 'A',
+                'mfe_pct': 0.0,
+                'mae_pct': 0.0,
+                'entry_vwap_ratio': round(entry_vwap_ratio, 4) if entry_vwap_ratio is not None else None,
+                'entry_gap_pct': round(entry_gap_pct, 4) if entry_gap_pct is not None else None,
             }
 
             self.active_positions[symbol] = position_info
@@ -611,6 +621,19 @@ class TradeExecutor:
             entry_time_str = entry_time_obj.strftime('%H:%M') if entry_time_obj else ''
             entry_pattern = pos_info.get('entry_pattern', 'A')
 
+            # 決済時刻・保有時間
+            exit_time_now = datetime.now()
+            exit_time_str = exit_time_now.strftime('%H:%M')
+            hold_minutes = int((exit_time_now - entry_time_obj).total_seconds() / 60) if entry_time_obj else 0
+
+            # MFE/MAE
+            mfe_pct = round(pos_info.get('mfe_pct', 0), 4)
+            mae_pct = round(pos_info.get('mae_pct', 0), 4)
+
+            # VWAP比・寄り乖離率
+            entry_vwap_ratio = pos_info.get('entry_vwap_ratio', '')
+            entry_gap_pct = pos_info.get('entry_gap_pct', '')
+
             record = {
                 'date': datetime.now().strftime('%Y%m%d'),
                 'code': symbol,
@@ -624,6 +647,12 @@ class TradeExecutor:
                 'volume_surge': round(volume_surge, 2),
                 'entry_time': entry_time_str,
                 'entry_pattern': entry_pattern,
+                'exit_time': exit_time_str,
+                'hold_minutes': hold_minutes,
+                'mfe_pct': mfe_pct,
+                'mae_pct': mae_pct,
+                'entry_vwap_ratio': entry_vwap_ratio if entry_vwap_ratio is not None else '',
+                'entry_gap_pct': entry_gap_pct if entry_gap_pct is not None else '',
             }
 
             df_new = pd.DataFrame([record])
@@ -666,6 +695,16 @@ class TradeExecutor:
                 profit_loss = pos['profit_loss']
                 profit_loss_rate = pos['profit_loss_rate']
                 logger.info(f"{symbol}: 損益={profit_loss:,.0f}円 ({profit_loss_rate:+.2f}%)")
+
+                # MFE/MAE更新（active_positionsに存在する場合）
+                if symbol in self.active_positions:
+                    pos_info = self.active_positions[symbol]
+                    entry_price = pos_info.get('entry_price', 0)
+                    current_price = pos.get('current_price', 0)
+                    if entry_price > 0 and current_price and current_price > 0:
+                        current_pct = (current_price - entry_price) / entry_price * 100
+                        pos_info['mfe_pct'] = max(pos_info.get('mfe_pct', 0), current_pct)
+                        pos_info['mae_pct'] = min(pos_info.get('mae_pct', 0), current_pct)
 
             # 決済済みポジション検知（active_positionsにあるがAPIのポジションにない）
             closed_symbols = []
@@ -880,6 +919,12 @@ class TradeExecutor:
             )
             target_order_id = target_result['order_id'] if target_result['result_code'] == 0 else None
 
+            # エントリー時のVWAP・始値を取得（分析用）
+            entry_vwap = board.get('vwap')
+            entry_opening = board.get('opening_price')
+            entry_vwap_ratio = ((current_price / entry_vwap) - 1) * 100 if entry_vwap and entry_vwap > 0 else None
+            entry_gap_pct = ((current_price / entry_opening) - 1) * 100 if entry_opening and entry_opening > 0 else None
+
             position_info = {
                 'entry_order_id': entry_order_id,
                 'stop_order_id': stop_order_id,
@@ -892,6 +937,10 @@ class TradeExecutor:
                 'material_strength': '',
                 'volume_surge': 0.0,
                 'entry_pattern': 'B',
+                'mfe_pct': 0.0,
+                'mae_pct': 0.0,
+                'entry_vwap_ratio': round(entry_vwap_ratio, 4) if entry_vwap_ratio is not None else None,
+                'entry_gap_pct': round(entry_gap_pct, 4) if entry_gap_pct is not None else None,
             }
 
             self.active_positions[symbol] = position_info

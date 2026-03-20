@@ -63,7 +63,7 @@ auto-daytrade/
 │   └── generate_historical_candidates.py  # 240営業日分一括生成 + 材料判定バッチ
 ├── data/
 │   ├── candidates_YYYYMMDD.csv       # 日次スクリーニング結果
-│   ├── trade_history.csv             # 本番トレード履歴（自動追記）
+│   ├── trade_history.csv             # 本番トレード履歴（自動追記・分析用カラム付き）
 │   └── cache/                        # J-Quants APIキャッシュ
 ├── morning_screening.py              # 7:00実行（スクリーニング）
 ├── auto_trading.py                   # 8:45実行（自動売買）
@@ -285,7 +285,7 @@ data/candidates_YYYYMMDD.csv
 | 決済失敗時Discord通知 | ⚠️ 手動確認を促す通知 | ✅ 実装済み |
 | 前日急騰銘柄除外 | 前日+5%以上の銘柄をスクリーニング時に除外 | ✅ 実装済み（3/18追加） |
 | 寄前エントリー対応 | pre_open=Trueで現在値チェックスキップ | ✅ 実装済み（3/20修正） |
-| トレード履歴自動保存 | 全決済をdata/trade_history.csvに追記 | ✅ 実装済み（3/19追加） |
+| トレード履歴自動保存 | 全決済をdata/trade_history.csvに追記（MFE/MAE/VWAP比等の分析カラム付き） | ✅ 実装済み（3/19追加、3/20分析カラム追加） |
 
 ---
 
@@ -389,3 +389,4 @@ data/candidates_YYYYMMDD.csv
 | 2026-03-20 | 寄前エントリーの現在値チェックスキップ修正（3/19エントリー0件の原因） |
 | 2026-03-20 | 地合いチェック改善: 日経先物を主指標に変更、閾値-2%→-1.5% |
 | 2026-03-20 | パターンBエントリーロジック実装（PATTERN_B_ENABLED=Falseで無効化中） |
+| 2026-03-20 | trade_history.csvに分析カラム追加（MFE/MAE/VWAP比/寄り乖離/保有時間） |
