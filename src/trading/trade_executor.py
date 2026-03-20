@@ -731,7 +731,8 @@ class TradeExecutor:
                         'time': datetime.now(),
                         'price': board.get('current_price'),
                         'volume': board.get('trading_volume'),
-                        'vwap': board.get('vwap'),  # VWAPが取れない場合はNone
+                        'vwap': board.get('vwap'),
+                        'opening_price': board.get('opening_price'),
                     }
 
                     # 価格履歴に追加（銘柄ごと）
@@ -799,10 +800,12 @@ class TradeExecutor:
                 return False
 
         # 条件2: 現在値が寄り付き値から+3%以内
-        # 寄り付き値は履歴の最初の価格で近似
-        first_price = history[0]['price']
-        if first_price and first_price > 0:
-            change_from_open = (current_price - first_price) / first_price * 100
+        # /board の OpeningPrice を使用（取得できなければ履歴の最初の価格で代用）
+        opening_price = latest.get('opening_price')
+        if opening_price is None or opening_price <= 0:
+            opening_price = history[0]['price']
+        if opening_price and opening_price > 0:
+            change_from_open = (current_price - opening_price) / opening_price * 100
             if change_from_open > 3.0:
                 logger.debug(f"パターンB {symbol}: 高値掴み防止（寄りから+{change_from_open:.1f}%）")
                 return False
