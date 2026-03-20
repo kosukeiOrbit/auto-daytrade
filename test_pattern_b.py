@@ -28,6 +28,7 @@ logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level:<7} | {mes
 
 # 検証ポートで初期化（本番.envを変更しない）
 TEST_API_URL = "http://localhost:18081/kabusapi"
+TEST_API_PASSWORD = "***REMOVED***"
 
 
 def main():
@@ -39,6 +40,8 @@ def main():
     # KabuClientを検証ポートで上書き初期化
     client = KabuClient()
     client.api_url = TEST_API_URL
+    client.api_password = TEST_API_PASSWORD
+    client.token = None  # 既存トークンをクリア
     logger.info(f"API URL を検証ポートに上書き: {client.api_url}")
 
     # トークン取得テスト
