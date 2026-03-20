@@ -165,6 +165,8 @@ class KabuClient:
                     'bid_price': board_data.get('BidPrice'),
                     'ask_price': board_data.get('AskPrice'),
                     'trading_volume': board_data.get('TradingVolume'),
+                    'vwap': board_data.get('VWAP'),
+                    'opening_price': board_data.get('OpeningPrice'),
                     'upper_limit': board_data.get('UpperLimit'),
                     'lower_limit': board_data.get('LowerLimit')
                 }
@@ -394,3 +396,62 @@ class KabuClient:
         except Exception as e:
             logger.error(f"保有ポジション取得エラー: {e}")
             raise
+
+    def get_ranking(self, ranking_type=6, exchange_division="ALL"):
+        """
+        ランキング情報を取得
+
+        Args:
+            ranking_type: ランキング種別（6=売買高急増）
+            exchange_division: 市場区分（"ALL"=全市場）
+
+        Returns:
+            list: ランキング銘柄リスト
+                [{
+                    'rank': int,
+                    'symbol': str,
+                    'symbol_name': str,
+                    'current_price': float,
+                    'change_pct': float,
+                    'trading_volume': float,
+                }]
+        """
+        token = self.get_token()
+
+        try:
+            url = f"{self.api_url}/ranking"
+            headers = {
+                "Content-Type": "application/json",
+                "X-API-KEY": token
+            }
+            params = {
+                "Type": ranking_type,
+                "ExchangeDivision": exchange_division
+            }
+
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                ranking_list = data.get('Ranking', [])
+
+                result = []
+                for item in ranking_list:
+                    result.append({
+                        'rank': item.get('No', 0),
+                        'symbol': item.get('Symbol', ''),
+                        'symbol_name': item.get('SymbolName', ''),
+                        'current_price': item.get('CurrentPrice', 0),
+                        'change_pct': item.get('ChangePercentage', 0),
+                        'trading_volume': item.get('TradingVolume', 0),
+                    })
+
+                logger.debug(f"ランキング取得成功: {len(result)}件")
+                return result
+            else:
+                logger.error(f"ランキング取得失敗: {response.status_code} - {response.text}")
+                return []
+
+        except Exception as e:
+            logger.error(f"ランキング取得エラー: {e}")
+            return []

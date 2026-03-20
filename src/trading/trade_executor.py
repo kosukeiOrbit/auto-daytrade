@@ -35,6 +35,9 @@ class TradeExecutor:
         self.consecutive_losses = 0   # 連敗カウント
         self.active_positions = {}    # アクティブなポジション
 
+        # パターンB: 銘柄ごとの直近価格履歴（5分足組み立て用）
+        self.pattern_b_price_history = {}  # {symbol: [{'time': datetime, 'price': float, 'volume': int, 'vwap': float}]}
+
         logger.info(f"TradeExecutor初期化: 予算={budget:,}円, 最大損失率={max_daily_loss_rate*100}%, 最大連敗={max_consecutive_losses}回")
 
     def load_candidates(self, date=None):
@@ -698,3 +701,210 @@ class TradeExecutor:
 
         except Exception as e:
             logger.error(f"ポジション監視エラー: {e}")
+
+    # ========== パターンB エントリーロジック ==========
+
+    def scan_pattern_b_candidates(self):
+        """
+        パターンB: 売買高急増ランキングから候補銘柄を検知し、
+        価格履歴を蓄積する。
+
+        Returns:
+            list: ランキング上位10銘柄のシンボルリスト
+        """
+        try:
+            ranking = self.kabu_client.get_ranking(ranking_type=6, exchange_division="ALL")
+
+            if not ranking:
+                return []
+
+            # 上位10銘柄のみ監視
+            top_symbols = []
+            for item in ranking[:10]:
+                symbol = item['symbol']
+                top_symbols.append(symbol)
+
+                # /board で詳細情報取得
+                try:
+                    board = self.kabu_client.get_symbol(symbol)
+                    price_record = {
+                        'time': datetime.now(),
+                        'price': board.get('current_price'),
+                        'volume': board.get('trading_volume'),
+                        'vwap': board.get('vwap'),  # VWAPが取れない場合はNone
+                    }
+
+                    # 価格履歴に追加（銘柄ごと）
+                    if symbol not in self.pattern_b_price_history:
+                        self.pattern_b_price_history[symbol] = []
+                    self.pattern_b_price_history[symbol].append(price_record)
+
+                    # 直近10分のデータのみ保持（古いデータを削除）
+                    cutoff = datetime.now() - timedelta(minutes=10)
+                    self.pattern_b_price_history[symbol] = [
+                        r for r in self.pattern_b_price_history[symbol]
+                        if r['time'] >= cutoff
+                    ]
+
+                except Exception as e:
+                    logger.debug(f"パターンB {symbol}: board取得失敗: {e}")
+
+            # ランキングから外れた銘柄の履歴を削除
+            for symbol in list(self.pattern_b_price_history.keys()):
+                if symbol not in top_symbols:
+                    del self.pattern_b_price_history[symbol]
+
+            return top_symbols
+
+        except Exception as e:
+            logger.error(f"パターンBスキャンエラー: {e}")
+            return []
+
+    def check_pattern_b_entry(self, symbol):
+        """
+        パターンBのエントリー条件をチェック
+
+        条件:
+        1. 現在値がVWAPより上
+        2. 現在値が寄り付き値から+3%以内
+        3. 直近5本の価格が上昇トレンド（終値切り上がり）
+        4. パターンAで既にポジションを持っていない
+
+        Args:
+            symbol: 銘柄コード
+
+        Returns:
+            bool: エントリー可能ならTrue
+        """
+        # ポジション保有中はスキップ（1銘柄制限）
+        if len(self.active_positions) > 0:
+            return False
+
+        # 価格履歴が5本以上必要
+        history = self.pattern_b_price_history.get(symbol, [])
+        if len(history) < 5:
+            return False
+
+        latest = history[-1]
+        current_price = latest['price']
+        vwap = latest.get('vwap')
+
+        if current_price is None or current_price <= 0:
+            return False
+
+        # 条件1: 現在値がVWAPより上
+        if vwap is not None and vwap > 0:
+            if current_price <= vwap:
+                logger.debug(f"パターンB {symbol}: VWAP割れ（現在値{current_price} <= VWAP{vwap}）")
+                return False
+
+        # 条件2: 現在値が寄り付き値から+3%以内
+        # 寄り付き値は履歴の最初の価格で近似
+        first_price = history[0]['price']
+        if first_price and first_price > 0:
+            change_from_open = (current_price - first_price) / first_price * 100
+            if change_from_open > 3.0:
+                logger.debug(f"パターンB {symbol}: 高値掴み防止（寄りから+{change_from_open:.1f}%）")
+                return False
+
+        # 条件3: 直近5本が上昇トレンド（価格が切り上がっている）
+        recent_5 = history[-5:]
+        prices = [r['price'] for r in recent_5 if r['price'] is not None]
+        if len(prices) < 5:
+            return False
+
+        is_uptrend = all(prices[i] <= prices[i + 1] for i in range(len(prices) - 1))
+        if not is_uptrend:
+            logger.debug(f"パターンB {symbol}: 上昇トレンドなし")
+            return False
+
+        logger.info(f"パターンB {symbol}: エントリー条件充足（価格{current_price}, VWAP{vwap}, 5本上昇）")
+        return True
+
+    def execute_pattern_b_entry(self, symbol):
+        """
+        パターンBのエントリーを実行（成行注文 + 逆指値 + 利確指値）
+
+        Args:
+            symbol: 銘柄コード
+
+        Returns:
+            dict: position_info or None
+        """
+        try:
+            board = self.kabu_client.get_symbol(symbol)
+            current_price = board['current_price']
+
+            if current_price is None or current_price <= 0:
+                logger.warning(f"パターンB {symbol}: 現在値取得失敗")
+                return None
+
+            qty = self.calculate_position_size(current_price)
+            if qty == 0:
+                logger.warning(f"パターンB {symbol}: ポジションサイズが0")
+                return None
+
+            # 成行注文（場中）
+            logger.info(f"パターンB {symbol}: 成行エントリー {qty}株 @ {current_price}円")
+            entry_result = self.kabu_client.send_order(
+                symbol=symbol,
+                exchange=1,
+                side=2,  # 買
+                qty=qty,
+                order_type=1,  # 成行
+                price=0
+            )
+
+            if entry_result['result_code'] != 0:
+                logger.error(f"パターンB {symbol}: エントリー注文失敗")
+                return None
+
+            entry_order_id = entry_result['order_id']
+
+            # 損切り -1%
+            stop_price = int(current_price * 0.99)
+            stop_result = self.kabu_client.send_order(
+                symbol=symbol, exchange=1, side=1, qty=qty,
+                order_type=3, price=0, stop_price=stop_price
+            )
+            stop_order_id = stop_result['order_id'] if stop_result['result_code'] == 0 else None
+
+            # 利確 +2%
+            target_price = int(current_price * 1.02)
+            target_result = self.kabu_client.send_order(
+                symbol=symbol, exchange=1, side=1, qty=qty,
+                order_type=2, price=target_price
+            )
+            target_order_id = target_result['order_id'] if target_result['result_code'] == 0 else None
+
+            position_info = {
+                'entry_order_id': entry_order_id,
+                'stop_order_id': stop_order_id,
+                'target_order_id': target_order_id,
+                'entry_price': current_price,
+                'qty': qty,
+                'stop_price': stop_price,
+                'target_price': target_price,
+                'entry_time': datetime.now(),
+                'material_strength': '',
+                'volume_surge': 0.0,
+                'entry_pattern': 'B',
+            }
+
+            self.active_positions[symbol] = position_info
+
+            self.notifier.send_trade_notification(
+                action="パターンBエントリー",
+                symbol=symbol,
+                price=current_price,
+                qty=qty,
+                stop_price=stop_price,
+                target_price=target_price
+            )
+
+            logger.success(f"パターンB {symbol}: エントリー完了 {qty}株 @ {current_price}円")
+            return position_info
+
+        except Exception as e:
+            logger.error(f"パターンB {symbol}: エントリーエラー: {e}")
+            return None

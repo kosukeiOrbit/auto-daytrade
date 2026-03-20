@@ -33,6 +33,10 @@ from src.utils.notifier import DiscordNotifier
 from src.utils.kabu_client import KabuClient
 from src.utils.config import Config
 
+# パターンBエントリー（場中の動意銘柄）のフラグ
+# True に変更するだけで有効化できる。本番実績を積んでから有効化すること。
+PATTERN_B_ENABLED = False
+
 # ログファイル設定
 log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)
@@ -151,6 +155,21 @@ def trading_loop(executor, notifier=None):
                 logger.error(f"大引け前決済エラー: {e}")
                 if notifier:
                     notifier.send_error(f"⚠️ 大引け前決済失敗: {e}\nポジションを手動確認してください")
+
+        # パターンB: 場中動意銘柄エントリー（9:30〜10:30、フラグ有効時のみ）
+        if PATTERN_B_ENABLED and 9 <= current_hour <= 10:
+            in_pattern_b_window = (current_hour == 9 and current_minute >= 30) or (current_hour == 10 and current_minute <= 30)
+            if in_pattern_b_window and len(executor.active_positions) == 0:
+                try:
+                    top_symbols = executor.scan_pattern_b_candidates()
+                    for symbol in top_symbols:
+                        if executor.check_pattern_b_entry(symbol):
+                            position = executor.execute_pattern_b_entry(symbol)
+                            if position:
+                                logger.success(f"パターンBエントリー成功: {symbol}")
+                                break
+                except Exception as e:
+                    logger.error(f"パターンBエラー: {e}")
 
         # ポジション監視（逆指値/指値の自動約定を検知→トレード履歴保存）
         try:
