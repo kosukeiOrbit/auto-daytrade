@@ -37,16 +37,19 @@ def main():
     logger.info(f"検証ポート: {TEST_API_URL}")
     logger.info("=" * 60)
 
-    # KabuClientを検証ポートで上書き初期化
+    # KabuClientを検証ポートで初期化
+    # __init__後に即座に上書きし、トークンを強制再取得する
     client = KabuClient()
     client.api_url = TEST_API_URL
     client.api_password = TEST_API_PASSWORD
-    client.token = None  # 既存トークンをクリア
+    client.token = None
+    client.token_expires_at = None
     logger.info(f"API URL を検証ポートに上書き: {client.api_url}")
 
-    # トークン取得テスト
+    # 検証ポートに対してトークンを取得（force_refreshでキャッシュ無視）
     try:
         token = client.get_token(force_refresh=True)
+        logger.info(f"取得したトークンの検証: API URL = {client.api_url}")
         logger.success(f"トークン取得成功: {token[:20]}...")
     except Exception as e:
         logger.error(f"トークン取得失敗: {e}")
