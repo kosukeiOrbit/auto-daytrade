@@ -926,14 +926,18 @@ class TradeExecutor:
                         'vwap': board.get('vwap'),
                         'opening_price': board.get('opening_price'),
                     }
+                    logger.debug(
+                        f"パターンB {symbol}: 始値={price_record['opening_price']}, "
+                        f"現在値={price_record['price']}"
+                    )
 
                     # 価格履歴に追加（銘柄ごと）
                     if symbol not in self.pattern_b_price_history:
                         self.pattern_b_price_history[symbol] = []
                     self.pattern_b_price_history[symbol].append(price_record)
 
-                    # 直近10分のデータのみ保持（古いデータを削除）
-                    cutoff = datetime.now() - timedelta(minutes=10)
+                    # 直近25分のデータのみ保持（20分平均+バッファ）
+                    cutoff = datetime.now() - timedelta(minutes=25)
                     self.pattern_b_price_history[symbol] = [
                         r for r in self.pattern_b_price_history[symbol]
                         if r['time'] >= cutoff
@@ -987,8 +991,8 @@ class TradeExecutor:
 
         # 条件1: 現在値がVWAPより上
         if vwap is not None and vwap > 0:
-            if current_price <= vwap:
-                logger.debug(f"パターンB {symbol}: VWAP割れ（現在値{current_price} <= VWAP{vwap}）")
+            if current_price < vwap * 0.998:
+                logger.debug(f"パターンB {symbol}: VWAP乖離不足（現在値{current_price} < VWAP{vwap} * 0.998）")
                 return False
 
         # 条件2: 現在値が寄り付き値から+3%以内
@@ -1008,9 +1012,10 @@ class TradeExecutor:
         if len(prices) < 5:
             return False
 
-        is_uptrend = all(prices[i] <= prices[i + 1] for i in range(len(prices) - 1))
+        up_count = sum(1 for i in range(len(prices) - 1) if prices[i + 1] > prices[i])
+        is_uptrend = up_count >= 3  # 5本中3本以上
         if not is_uptrend:
-            logger.debug(f"パターンB {symbol}: 上昇トレンドなし")
+            logger.debug(f"パターンB {symbol}: 上昇本数不足（{up_count}/4）")
             return False
 
         logger.info(f"パターンB {symbol}: エントリー条件充足（価格{current_price}, VWAP{vwap}, 5本上昇）")

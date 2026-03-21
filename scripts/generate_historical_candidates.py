@@ -217,9 +217,9 @@ def main():
     jst = tz.gettz("Asia/Tokyo")
     now = datetime.now(jst)
 
-    # 過去240営業日を取得（約1年間）
+    # 過去500営業日を取得（約2年間）
     logger.info("営業日リストを生成中...")
-    business_days = get_business_days(now, num_days=240)
+    business_days = get_business_days(now, num_days=500)
     logger.info(f"対象期間: {business_days[0].strftime('%Y-%m-%d')} ～ {business_days[-1].strftime('%Y-%m-%d')}")
 
     # STEP 1: J-Quants APIクライアント初期化
@@ -315,6 +315,7 @@ def main():
         while next_bd.weekday() >= 5 or jpholiday.is_holiday(next_bd):
             next_bd += timedelta(days=1)
         trade_date_str = next_bd.strftime('%Y%m%d')
+        data_date_str = date.strftime('%Y%m%d')
         output_path = f"data/candidates_{trade_date_str}.csv"
 
         # 既存ファイルチェック
@@ -330,7 +331,7 @@ def main():
             df_day = df_all[df_all['Date'] == pd.Timestamp(date.date())].copy()
 
             if len(df_day) == 0:
-                logger.warning(f"{date_str}: データなし（休場日の可能性）")
+                logger.warning(f"{data_date_str}: データなし（休場日の可能性）")
                 error_count += 1
                 continue
 
@@ -353,7 +354,7 @@ def main():
             )
 
             if len(candidates) == 0:
-                logger.warning(f"{date_str}: 候補銘柄なし")
+                logger.warning(f"{data_date_str}: 候補銘柄なし")
                 error_count += 1
                 continue
 
@@ -361,17 +362,17 @@ def main():
             candidates['has_material'] = True
             candidates['material_strength'] = '中'  # デフォルト「中」
             candidates['material_type'] = '出来高急増'
-            candidates['material_summary'] = f'{date_str} 出来高急増銘柄'
+            candidates['material_summary'] = f'{data_date_str} 出来高急増銘柄'
 
             # CSV保存
             os.makedirs("data", exist_ok=True)
             candidates.to_csv(output_path, index=False, encoding='utf-8-sig')
-            logger.success(f"{date_str}: 保存完了 ({len(candidates)}銘柄) → {output_path}")
+            logger.success(f"{data_date_str}: 保存完了 ({len(candidates)}銘柄) → {output_path}")
 
             success_count += 1
 
         except Exception as e:
-            logger.error(f"{date_str}: エラー - {e}")
+            logger.error(f"{data_date_str}: エラー - {e}")
             error_count += 1
             continue
 
@@ -524,7 +525,7 @@ def judge_materials(days=None):
             logger.info(f"  {date_str}: {judged_count}件判定 → 採用{adopted_count}件 / 除外{judged_count - adopted_count}件")
 
         except Exception as e:
-            logger.error(f"  {date_str}: エラー - {e}")
+            logger.error(f"  {data_date_str}: エラー - {e}")
             continue
 
     # サマリー
