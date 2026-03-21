@@ -397,6 +397,64 @@ class KabuClient:
             logger.error(f"保有ポジション取得エラー: {e}")
             raise
 
+    def get_orders(self, symbol=None):
+        """
+        注文一覧を取得
+
+        Args:
+            symbol: 銘柄コード（Noneの場合は全注文）
+
+        Returns:
+            list: 注文リスト
+        """
+        token = self.get_token()
+
+        try:
+            url = f"{self.api_url}/orders"
+            headers = {
+                "Content-Type": "application/json",
+                "X-API-KEY": token
+            }
+            params = {}
+            if symbol:
+                params['product'] = 0  # 0=すべて
+                params['symbol'] = symbol
+
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+
+            if response.status_code == 200:
+                orders = response.json()
+                result = []
+                for order in orders:
+                    # 約定済みの詳細を取得
+                    details = order.get('Details', [])
+                    exec_price = None
+                    for detail in details:
+                        if detail.get('ExecPrice') is not None:
+                            exec_price = detail.get('ExecPrice')
+
+                    result.append({
+                        'order_id': order.get('ID', ''),
+                        'symbol': order.get('Symbol', ''),
+                        'side': order.get('Side', ''),
+                        'state': order.get('State', 0),  # 5=完了
+                        'order_type': order.get('CashMargin', 0),
+                        'price': order.get('Price', 0),
+                        'exec_price': exec_price,
+                        'qty': order.get('OrderQty', 0),
+                        'cum_qty': order.get('CumQty', 0),
+                    })
+
+                logger.debug(f"注文一覧取得成功: {len(result)}件")
+                return result
+            else:
+                logger.error(f"注文一覧取得失敗: {response.status_code}")
+                return []
+
+        except Exception as e:
+            logger.error(f"注文一覧取得エラー: {e}")
+            return []
+
     def get_ranking(self, ranking_type=6, exchange_division="ALL"):
         """
         ランキング情報を取得

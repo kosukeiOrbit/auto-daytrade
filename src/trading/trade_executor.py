@@ -31,8 +31,9 @@ class TradeExecutor:
         self.max_consecutive_losses = max_consecutive_losses
 
         # トレード状態管理
-        self.daily_profit_loss = 0.0  # 日次損益
-        self.consecutive_losses = 0   # 連敗カウント
+        self.daily_profit_loss = 0.0  # 日次損益（決済のたびに更新）
+        self.consecutive_losses = 0   # 連敗カウント（決済のたびに更新）
+        self.last_trade_date = None   # 日次損益リセット用
         self.active_positions = {}    # アクティブなポジション
 
         # パターンB: 銘柄ごとの直近価格履歴（5分足組み立て用）
@@ -329,7 +330,21 @@ class TradeExecutor:
                 stop_price=stop_price
             )
 
-            stop_order_id = stop_result['order_id'] if stop_result['result_code'] == 0 else None
+            if stop_result['result_code'] != 0:
+                # 逆指値失敗 → 即座に成行で反対売買して緊急決済
+                logger.error(f"{symbol}: 逆指値注文失敗！緊急決済を実行")
+                self.notifier.send_error(f"🚨 {symbol}: 逆指値注文失敗！損切なしポジション回避のため緊急決済")
+                try:
+                    self.kabu_client.send_order(
+                        symbol=symbol, exchange=exchange, side=1, qty=qty,
+                        order_type=1, price=0  # 成行売り
+                    )
+                except Exception as emergency_e:
+                    logger.error(f"{symbol}: 緊急決済も失敗: {emergency_e}")
+                    self.notifier.send_error(f"🚨🚨 {symbol}: 緊急決済失敗！手動確認必須: {emergency_e}")
+                return None
+
+            stop_order_id = stop_result['order_id']
 
             # 指値（利確）注文
             logger.info(f"{symbol}: 指値注文 {qty}株 @ {target_price}円で売")
@@ -343,6 +358,9 @@ class TradeExecutor:
             )
 
             target_order_id = target_result['order_id'] if target_result['result_code'] == 0 else None
+            if target_order_id is None:
+                logger.warning(f"{symbol}: 利確指値注文失敗（逆指値は有効なため続行）")
+                self.notifier.send_error(f"⚠️ {symbol}: 利確指値注文失敗。逆指値は有効。手動で利確指値を設定してください")
 
             # エントリー時のVWAP・始値を取得（分析用）
             entry_vwap = symbol_info.get('vwap')
@@ -401,6 +419,13 @@ class TradeExecutor:
         logger.info("=" * 60)
         logger.info("日次自動売買開始（1日1銘柄集中）")
         logger.info("=" * 60)
+
+        # 日次損益リセット（日付が変わった場合）
+        today = datetime.now().date()
+        if self.last_trade_date != today:
+            self.daily_profit_loss = 0.0
+            self.last_trade_date = today
+            logger.info(f"日次損益リセット（連敗カウント={self.consecutive_losses}回は継続）")
 
         # 安全装置チェック
         is_safe, reason = self.check_safety_conditions()
@@ -491,6 +516,41 @@ class TradeExecutor:
             f"自動売買完了\nエントリー: {entry_count}銘柄\n候補: {len(candidates_df)}銘柄"
         )
 
+    def _get_actual_exit_info(self, symbol, entry_price, stop_price, target_price):
+        """注文履歴から実際の約定価格と決済理由を取得（フォールバック付き）"""
+        try:
+            orders = self.kabu_client.get_orders(symbol=symbol)
+            # 売り注文で約定済み（state=5）のものを探す
+            for order in orders:
+                if order.get('side') == '1' and order.get('state') == 5 and order.get('exec_price'):
+                    actual_price = order['exec_price']
+                    # 利確/損切の判定
+                    if actual_price >= entry_price:
+                        return actual_price, '利確'
+                    else:
+                        return actual_price, '損切り'
+        except Exception as e:
+            logger.warning(f"{symbol}: 注文履歴取得失敗、推測価格を使用: {e}")
+
+        # フォールバック: 推測ロジック（従来通り）
+        logger.info(f"{symbol}: 推測価格使用（注文履歴取得失敗）")
+        if target_price > 0 and entry_price > 0:
+            # 利確ラインに到達していた可能性がある場合
+            return target_price, '利確'
+        return stop_price, '損切り'
+
+    def _cancel_existing_orders(self, symbol, pos_info):
+        """既存の逆指値・利確指値注文をキャンセル（強制決済前に呼ぶ）"""
+        for order_key, label in [('stop_order_id', '逆指値'), ('target_order_id', '利確指値')]:
+            order_id = pos_info.get(order_key)
+            if order_id:
+                try:
+                    result = self.kabu_client.cancel_order(order_id)
+                    logger.info(f"{symbol}: {label}注文キャンセル (ID={order_id})")
+                except Exception as e:
+                    logger.warning(f"{symbol}: {label}キャンセル失敗: {e}")
+                    self.notifier.send_error(f"⚠️ {symbol}: {label}キャンセル失敗: {e}")
+
     def force_exit_losing_positions_midday(self):
         """
         11:30（前場引け）の含み損ポジション強制成行決済
@@ -519,6 +579,10 @@ class TradeExecutor:
                 if profit_loss < 0:
                     logger.warning(f"{symbol}: 含み損 {profit_loss:,.0f}円 → 前場引け強制決済")
 
+                    # 既存の逆指値・利確指値をキャンセル
+                    pos_info = self.active_positions.get(symbol, {})
+                    self._cancel_existing_orders(symbol, pos_info)
+
                     # 成行売り注文
                     self.kabu_client.send_order(
                         symbol=symbol,
@@ -530,7 +594,7 @@ class TradeExecutor:
                     )
 
                     # トレード履歴保存
-                    entry_price = self.active_positions.get(symbol, {}).get('entry_price', 0)
+                    entry_price = pos_info.get('entry_price', 0)
                     self.save_trade_history(symbol, entry_price, pos['current_price'], qty, '前場強制')
 
                     # Discord通知
@@ -575,6 +639,10 @@ class TradeExecutor:
 
                 logger.info(f"{symbol}: 損益={profit_loss:,.0f}円 → 大引け前強制決済")
 
+                # 既存の逆指値・利確指値をキャンセル
+                pos_info = self.active_positions.get(symbol, {})
+                self._cancel_existing_orders(symbol, pos_info)
+
                 # 成行売り注文
                 self.kabu_client.send_order(
                     symbol=symbol,
@@ -586,7 +654,7 @@ class TradeExecutor:
                 )
 
                 # トレード履歴保存
-                entry_price = self.active_positions.get(symbol, {}).get('entry_price', 0)
+                entry_price = pos_info.get('entry_price', 0)
                 exit_reason = '大引強制'
                 self.save_trade_history(symbol, entry_price, pos['current_price'], qty, exit_reason)
 
@@ -623,6 +691,14 @@ class TradeExecutor:
 
             profit_loss = (exit_price - entry_price) * qty
             profit_pct = (exit_price - entry_price) / entry_price * 100 if entry_price > 0 else 0
+
+            # 安全装置カウンター更新
+            self.daily_profit_loss += profit_loss
+            if profit_loss > 0:
+                self.consecutive_losses = 0
+            else:
+                self.consecutive_losses += 1
+            logger.info(f"安全装置更新: 日次損益={self.daily_profit_loss:+,.0f}円, 連敗={self.consecutive_losses}回")
 
             # active_positionsからcandidate情報を取得
             pos_info = self.active_positions.get(symbol, {})
@@ -732,23 +808,17 @@ class TradeExecutor:
                     stop_price = pos_info.get('stop_price', 0)
                     target_price = pos_info.get('target_price', 0)
 
-                    # 決済理由の推定（損切りか利確か）
-                    # 最新の約定価格が取れない場合、stop/targetとの距離で判定
-                    # → 保守的にstop_priceで損切りと仮定し、後で実際の約定価格で補正
-                    exit_reason = '損切り'
-                    exit_price = stop_price
+                    # 約定済み注文からもう一方をキャンセル
+                    self._cancel_existing_orders(symbol, pos_info)
 
-                    # 利確の可能性チェック（target_priceに近い場合）
-                    if target_price > 0 and entry_price > 0:
-                        # 利確ラインは+2%、損切りは-1%
-                        # target到達の方が有利なので利確と判定
-                        if profit_loss_rate is not None and profit_loss_rate > 0:
-                            exit_reason = '利確'
-                            exit_price = target_price
+                    # 実際の約定価格を注文履歴から取得
+                    exit_price, exit_reason = self._get_actual_exit_info(
+                        symbol, entry_price, stop_price, target_price
+                    )
 
                     self.save_trade_history(symbol, entry_price, exit_price, qty, exit_reason)
                     closed_symbols.append(symbol)
-                    logger.info(f"{symbol}: 自動決済検知 → {exit_reason} トレード履歴保存")
+                    logger.info(f"{symbol}: 自動決済検知 → {exit_reason} @ {exit_price:.0f}円 トレード履歴保存")
 
             # 決済済みポジションをactive_positionsから削除
             for symbol in closed_symbols:
@@ -925,7 +995,21 @@ class TradeExecutor:
                 symbol=symbol, exchange=1, side=1, qty=qty,
                 order_type=3, price=0, stop_price=stop_price
             )
-            stop_order_id = stop_result['order_id'] if stop_result['result_code'] == 0 else None
+
+            if stop_result['result_code'] != 0:
+                logger.error(f"パターンB {symbol}: 逆指値注文失敗！緊急決済を実行")
+                self.notifier.send_error(f"🚨 パターンB {symbol}: 逆指値失敗！緊急決済")
+                try:
+                    self.kabu_client.send_order(
+                        symbol=symbol, exchange=1, side=1, qty=qty,
+                        order_type=1, price=0
+                    )
+                except Exception as emergency_e:
+                    logger.error(f"パターンB {symbol}: 緊急決済失敗: {emergency_e}")
+                    self.notifier.send_error(f"🚨🚨 パターンB {symbol}: 緊急決済失敗！手動確認必須: {emergency_e}")
+                return None
+
+            stop_order_id = stop_result['order_id']
 
             # 利確 +2%
             target_price = int(current_price * 1.02)
@@ -934,6 +1018,9 @@ class TradeExecutor:
                 order_type=2, price=target_price
             )
             target_order_id = target_result['order_id'] if target_result['result_code'] == 0 else None
+            if target_order_id is None:
+                logger.warning(f"パターンB {symbol}: 利確指値失敗（逆指値は有効なため続行）")
+                self.notifier.send_error(f"⚠️ パターンB {symbol}: 利確指値失敗。逆指値は有効")
 
             # エントリー時のVWAP・始値を取得（分析用）
             entry_vwap = board.get('vwap')
