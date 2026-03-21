@@ -308,16 +308,22 @@ def main():
     error_count = 0
 
     for i, date in enumerate(business_days, start=1):
-        date_str = date.strftime('%Y%m%d')
-        output_path = f"data/candidates_{date_str}.csv"
+        # ファイル名は「翌営業日」（＝実際にトレードする日）で保存
+        # 本番のmorning_screening.pyと同じ命名規則：
+        #   data日=前営業日、ファイル名=実行日（トレード日）
+        next_bd = date + timedelta(days=1)
+        while next_bd.weekday() >= 5 or jpholiday.is_holiday(next_bd):
+            next_bd += timedelta(days=1)
+        trade_date_str = next_bd.strftime('%Y%m%d')
+        output_path = f"data/candidates_{trade_date_str}.csv"
 
         # 既存ファイルチェック
         if os.path.exists(output_path):
-            logger.info(f"[{i}/{len(business_days)}] {date.strftime('%Y-%m-%d')}: 既存ファイルをスキップ")
+            logger.info(f"[{i}/{len(business_days)}] {date.strftime('%Y-%m-%d')} → トレード日{trade_date_str}: 既存ファイルをスキップ")
             skip_count += 1
             continue
 
-        logger.info(f"[{i}/{len(business_days)}] {date.strftime('%Y-%m-%d')}: 処理中...")
+        logger.info(f"[{i}/{len(business_days)}] {date.strftime('%Y-%m-%d')} → トレード日{trade_date_str}: 処理中...")
 
         try:
             # その日のデータを抽出（Timestamp型で比較）
