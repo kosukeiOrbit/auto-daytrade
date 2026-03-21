@@ -336,6 +336,10 @@ data/candidates_YYYYMMDD.csv
 なお、寄り付きの板寄せ前の値動きは完全には再現できないため、
 実運用では若干の乖離が生じる可能性がある。
 
+**※パターンBバックテストの注意：**
+パターンBバックテストはcandidates銘柄限定での検証のため
+過大評価の可能性あり。本番実績との乖離を継続的に検証すること。
+
 ---
 
 ## 開発フェーズ
@@ -420,3 +424,4 @@ data/candidates_YYYYMMDD.csv
 | 2026-03-20 | パターンBエントリーロジック実装（PATTERN_B_ENABLED=Falseで無効化中） |
 | 2026-03-20 | trade_history.csvに分析カラム追加（MFE/MAE/VWAP比/寄り乖離/保有時間/material_type/opening_gap） |
 | 2026-03-21 | 分足バックテスト実施（equities_bars_minute使用）・設計書更新 |
+| 2026-03-21 | パターンBバックテスト実施・設計制約をコメント・設計書に明記 |
