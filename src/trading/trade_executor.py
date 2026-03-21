@@ -516,26 +516,52 @@ class TradeExecutor:
             f"自動売買完了\nエントリー: {entry_count}銘柄\n候補: {len(candidates_df)}銘柄"
         )
 
-    def _get_actual_exit_info(self, symbol, entry_price, stop_price, target_price):
-        """注文履歴から実際の約定価格と決済理由を取得（フォールバック付き）"""
+    def _get_actual_exit_info(self, symbol, pos_info):
+        """注文履歴から実際の約定価格と決済理由を取得（注文ID絞り込み付き）"""
+        entry_price = pos_info.get('entry_price', 0)
+        stop_price = pos_info.get('stop_price', 0)
+        target_price = pos_info.get('target_price', 0)
+
+        # 注文IDで絞り込み
+        target_ids = {
+            pos_info.get('stop_order_id'),
+            pos_info.get('target_order_id'),
+        } - {None}
+
         try:
             orders = self.kabu_client.get_orders(symbol=symbol)
-            # 売り注文で約定済み（state=5）のものを探す
-            for order in orders:
-                if order.get('side') == '1' and order.get('state') == 5 and order.get('exec_price'):
-                    actual_price = order['exec_price']
-                    # 利確/損切の判定
+
+            # 注文IDが一致する約定済み注文を探す
+            if target_ids:
+                matched = [
+                    o for o in orders
+                    if o.get('order_id') in target_ids
+                    and o.get('state') == 5
+                    and o.get('exec_price')
+                ]
+                if matched:
+                    actual_price = matched[0]['exec_price']
                     if actual_price >= entry_price:
                         return actual_price, '利確'
                     else:
                         return actual_price, '損切り'
+
+            # 注文IDで特定できなかった場合、売り・約定済み注文から探す
+            for order in orders:
+                if order.get('side') == '1' and order.get('state') == 5 and order.get('exec_price'):
+                    actual_price = order['exec_price']
+                    logger.warning(f"{symbol}: 注文IDで約定を特定できず。売り約定注文から推定。")
+                    if actual_price >= entry_price:
+                        return actual_price, '利確'
+                    else:
+                        return actual_price, '損切り'
+
         except Exception as e:
             logger.warning(f"{symbol}: 注文履歴取得失敗、推測価格を使用: {e}")
 
-        # フォールバック: 推測ロジック（従来通り）
-        logger.info(f"{symbol}: 推測価格使用（注文履歴取得失敗）")
+        # フォールバック: 推測ロジック
+        logger.warning(f"{symbol}: 推測価格使用（注文履歴から約定価格を取得できず）")
         if target_price > 0 and entry_price > 0:
-            # 利確ラインに到達していた可能性がある場合
             return target_price, '利確'
         return stop_price, '損切り'
 
@@ -775,10 +801,27 @@ class TradeExecutor:
         """
         保有ポジションを監視
         決済済みポジション（逆指値/指値で自動約定）を検知してトレード履歴に保存
+
+        安全対策：
+        - get_positions()が空を返した場合、active_positionsに保有中なら
+          APIエラーの可能性としてスキップ（誤キャンセル防止）
+        - ポジション消失時はget_orders()で約定確認してから処理
         """
         try:
             positions = self.kabu_client.get_positions()
             current_symbols = {pos['symbol'] for pos in positions}
+
+            # get_positions()が空だがactive_positionsに保有中 → APIエラーの可能性
+            if len(positions) == 0 and len(self.active_positions) > 0:
+                logger.warning(
+                    "get_positions()が空を返しましたが、"
+                    f"active_positionsに{len(self.active_positions)}銘柄保有中。"
+                    "APIエラーの可能性があるためスキップします。"
+                )
+                self.notifier.send_error(
+                    "⚠️ get_positions()が予期しない結果を返しました。手動確認を推奨します。"
+                )
+                return
 
             logger.info(f"保有ポジション: {len(positions)}件")
 
@@ -802,19 +845,24 @@ class TradeExecutor:
             closed_symbols = []
             for symbol, pos_info in list(self.active_positions.items()):
                 if symbol not in current_symbols:
-                    # 自動決済された（逆指値or指値が約定）
+                    # get_orders()で実際に約定済みか確認
+                    if not self._is_position_actually_closed(symbol, pos_info):
+                        logger.warning(
+                            f"{symbol}: get_positions()に存在しないが約定確認できず。"
+                            "APIエラーの可能性があるためスキップ。"
+                        )
+                        self.notifier.send_error(
+                            f"⚠️ {symbol}: ポジション消失を検知しましたが約定確認できず。手動確認を推奨します。"
+                        )
+                        continue
+
+                    # 約定確認できた → 残注文キャンセル＋履歴保存
                     entry_price = pos_info.get('entry_price', 0)
                     qty = pos_info.get('qty', 0)
-                    stop_price = pos_info.get('stop_price', 0)
-                    target_price = pos_info.get('target_price', 0)
 
-                    # 約定済み注文からもう一方をキャンセル
                     self._cancel_existing_orders(symbol, pos_info)
 
-                    # 実際の約定価格を注文履歴から取得
-                    exit_price, exit_reason = self._get_actual_exit_info(
-                        symbol, entry_price, stop_price, target_price
-                    )
+                    exit_price, exit_reason = self._get_actual_exit_info(symbol, pos_info)
 
                     self.save_trade_history(symbol, entry_price, exit_price, qty, exit_reason)
                     closed_symbols.append(symbol)
@@ -826,6 +874,25 @@ class TradeExecutor:
 
         except Exception as e:
             logger.error(f"ポジション監視エラー: {e}")
+
+    def _is_position_actually_closed(self, symbol, pos_info):
+        """get_orders()で実際に約定済みかを確認"""
+        target_ids = {
+            pos_info.get('stop_order_id'),
+            pos_info.get('target_order_id'),
+        } - {None}
+
+        try:
+            orders = self.kabu_client.get_orders(symbol=symbol)
+            for order in orders:
+                if order.get('state') == 5 and order.get('side') == '1':
+                    # 注文IDが一致するか、売り約定済み注文があれば確定
+                    if not target_ids or order.get('order_id') in target_ids:
+                        return True
+            return False
+        except Exception as e:
+            logger.warning(f"{symbol}: 約定確認のget_orders()失敗: {e}")
+            return False
 
     # ========== パターンB エントリーロジック ==========
 
