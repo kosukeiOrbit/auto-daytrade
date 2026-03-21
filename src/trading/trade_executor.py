@@ -38,6 +38,7 @@ class TradeExecutor:
 
         # パターンB: 銘柄ごとの直近価格履歴（5分足組み立て用）
         self.pattern_b_price_history = {}  # {symbol: [{'time': datetime, 'price': float, 'volume': int, 'vwap': float}]}
+        self.pattern_b_last_volume = {}    # {symbol: 前回の累積出来高}（差分計算用）
 
         logger.info(f"TradeExecutor初期化: 予算={budget:,}円, 最大損失率={max_daily_loss_rate*100}%, 最大連敗={max_consecutive_losses}回")
 
@@ -919,16 +920,25 @@ class TradeExecutor:
                 # /board で詳細情報取得
                 try:
                     board = self.kabu_client.get_symbol(symbol)
+
+                    # 累積出来高→差分（その1分間の出来高）に変換
+                    current_cumulative = board.get('trading_volume', 0) or 0
+                    last_cumulative = self.pattern_b_last_volume.get(symbol, 0)
+                    delta_volume = current_cumulative - last_cumulative
+                    if delta_volume < 0:
+                        delta_volume = current_cumulative  # リセット時の対処
+                    self.pattern_b_last_volume[symbol] = current_cumulative
+
                     price_record = {
                         'time': datetime.now(),
                         'price': board.get('current_price'),
-                        'volume': board.get('trading_volume'),
+                        'volume': delta_volume,  # 差分出来高（その分の出来高）
                         'vwap': board.get('vwap'),
                         'opening_price': board.get('opening_price'),
                     }
                     logger.debug(
                         f"パターンB {symbol}: 始値={price_record['opening_price']}, "
-                        f"現在値={price_record['price']}"
+                        f"現在値={price_record['price']}, 出来高差分={delta_volume}"
                     )
 
                     # 価格履歴に追加（銘柄ごと）
@@ -1018,7 +1028,16 @@ class TradeExecutor:
             logger.debug(f"パターンB {symbol}: 上昇本数不足（{up_count}/4）")
             return False
 
-        logger.info(f"パターンB {symbol}: エントリー条件充足（価格{current_price}, VWAP{vwap}, 5本上昇）")
+        # 条件4: 出来高急増（直近履歴の平均の2倍以上）
+        volumes = [r['volume'] for r in history if r.get('volume', 0) > 0]
+        if len(volumes) >= 5:
+            avg_volume = sum(volumes[:-1]) / len(volumes[:-1])  # 最新を除いた平均
+            latest_volume = volumes[-1]
+            if avg_volume > 0 and latest_volume < avg_volume * 2.0:
+                logger.debug(f"パターンB {symbol}: 出来高急増なし（{latest_volume:.0f} < {avg_volume:.0f} × 2.0）")
+                return False
+
+        logger.info(f"パターンB {symbol}: エントリー条件充足（価格{current_price}, VWAP{vwap}, 5本上昇, 出来高OK）")
         return True
 
     def execute_pattern_b_entry(self, symbol):
