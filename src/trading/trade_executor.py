@@ -1029,7 +1029,7 @@ class TradeExecutor:
                     last_cumulative = self.pattern_b_last_volume.get(symbol, 0)
                     delta_volume = current_cumulative - last_cumulative
                     if delta_volume < 0:
-                        delta_volume = current_cumulative  # リセット時の対処
+                        delta_volume = 0  # リセット時は0として扱う（過大評価防止）
                     self.pattern_b_last_volume[symbol] = current_cumulative
 
                     price_record = {
