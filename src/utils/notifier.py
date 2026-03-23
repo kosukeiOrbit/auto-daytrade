@@ -190,6 +190,87 @@ class DiscordNotifier:
 
         self._send_message(content)
 
+    def send_daily_report(self, report):
+        """
+        日次トレードレポートをDiscordに送信
+
+        Args:
+            report: generate_daily_report()の戻り値（dict）
+        """
+        date_str = report.get('date', '')
+        formatted_date = f"{date_str[:4]}/{date_str[4:6]}/{date_str[6:8]}" if len(date_str) == 8 else date_str
+
+        content = f"📊 **本日のトレードレポート（{formatted_date}）**\n"
+        content += "━━━━━━━━━━━━━━━━━━\n"
+
+        # 買付余力
+        opening = report.get('opening_wallet')
+        closing = report.get('closing_wallet')
+        if opening is not None and closing is not None:
+            diff = report.get('wallet_diff', 0) or 0
+            diff_sign = "+" if diff >= 0 else ""
+            content += f"💳 買付余力：{opening:,.0f}円 → {closing:,.0f}円（{diff_sign}{diff:,.0f}円）\n"
+
+        trade_count = report.get('trade_count', 0)
+
+        if trade_count > 0:
+            total_pnl = report.get('total_pnl', 0)
+            pnl_emoji = "📈" if total_pnl >= 0 else "📉"
+            pnl_sign = "+" if total_pnl >= 0 else ""
+            win = report.get('win_count', 0)
+            lose = report.get('lose_count', 0)
+            win_rate = report.get('win_rate', 0)
+
+            content += f"{pnl_emoji} 本日損益：{pnl_sign}{total_pnl:,.0f}円\n"
+            content += f"🏆 勝率：{win}勝{lose}敗（{win_rate:.1f}%）\n"
+            content += f"🔢 トレード数：{trade_count}件\n"
+        else:
+            content += "本日はトレードなし\n"
+
+        tp = report.get('take_profit_pct', 2.0)
+        sl = report.get('stop_loss_pct', 1.0)
+        content += f"⚙️ パラメータ：利確+{tp}% / 損切-{sl}%\n"
+
+        # トレード詳細
+        if trade_count > 0:
+            content += "\n**【トレード詳細】**\n"
+            for t in report.get('trades', []):
+                code = t.get('code', '')
+                name = t.get('symbol_name', '')
+                pattern = t.get('entry_pattern', 'A')
+                strength = t.get('material_strength', '')
+                m_type = t.get('material_type', '')
+                entry_time = t.get('entry_time', '')
+                exit_time = t.get('exit_time', '')
+                hold = t.get('hold_minutes', 0)
+                pnl = t.get('profit_loss', 0)
+                pct = t.get('profit_pct', 0)
+                reason = t.get('exit_reason', '')
+                surge = t.get('volume_surge', 0)
+                vwap_ratio = t.get('entry_vwap_ratio', '')
+                mfe = t.get('mfe_pct', 0)
+                mae = t.get('mae_pct', 0)
+
+                pnl_sign = "+" if pnl >= 0 else ""
+                pct_sign = "+" if pct >= 0 else ""
+
+                content += f"\n**{code} {name}**｜パターン:{pattern}"
+                if strength:
+                    material_info = f"材料:{strength}"
+                    if m_type:
+                        material_info += f"（{m_type}）"
+                    content += f"｜{material_info}"
+                content += f"\n{entry_time}→{exit_time}（{hold}分）\n"
+                content += f"{pnl_sign}{pnl:,.0f}円（{pct_sign}{pct:.1f}%）｜{reason}\n"
+                content += f"出来高:{surge:.1f}倍"
+                if vwap_ratio != '':
+                    content += f"｜VWAP比:{vwap_ratio}%"
+                content += f"｜MFE:{mfe:+.1f}%｜MAE:{mae:+.1f}%\n"
+
+        content += "━━━━━━━━━━━━━━━━━━"
+
+        self._send_message(content)
+
     def send_message(self, message):
         """
         汎用メッセージ送信

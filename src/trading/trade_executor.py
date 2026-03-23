@@ -798,6 +798,84 @@ class TradeExecutor:
         except Exception as e:
             logger.error(f"トレード履歴保存エラー: {e}")
 
+    def generate_daily_report(self, opening_wallet=None, closing_wallet=None, take_profit_pct=2.0, stop_loss_pct=1.0):
+        """
+        本日のトレード結果を集計してレポートを生成
+
+        Args:
+            opening_wallet: 開場時の買付余力
+            closing_wallet: 終了時の買付余力
+            take_profit_pct: 利確設定（%）
+            stop_loss_pct: 損切設定（%）
+
+        Returns:
+            dict: 日次レポートデータ
+        """
+        today_str = datetime.now().strftime('%Y%m%d')
+        filepath = "data/trade_history.csv"
+
+        trades = []
+        if os.path.exists(filepath):
+            df = pd.read_csv(filepath, encoding='utf-8-sig')
+            df_today = df[df['date'].astype(str) == today_str]
+
+            for _, row in df_today.iterrows():
+                code = str(row.get('code', ''))
+
+                # 銘柄名取得
+                symbol_name = ''
+                try:
+                    board = self.kabu_client.get_symbol(code)
+                    symbol_name = board.get('symbol_name', '') or ''
+                except Exception:
+                    pass
+
+                trades.append({
+                    'code': code,
+                    'symbol_name': symbol_name,
+                    'profit_loss': float(row.get('profit_loss', 0)),
+                    'profit_pct': float(row.get('profit_pct', 0)),
+                    'exit_reason': str(row.get('exit_reason', '')),
+                    'material_strength': str(row.get('material_strength', '')),
+                    'material_type': str(row.get('material_type', '')),
+                    'volume_surge': float(row.get('volume_surge', 0)),
+                    'entry_time': str(row.get('entry_time', '')),
+                    'exit_time': str(row.get('exit_time', '')),
+                    'hold_minutes': int(row.get('hold_minutes', 0)),
+                    'mfe_pct': float(row.get('mfe_pct', 0)),
+                    'mae_pct': float(row.get('mae_pct', 0)),
+                    'entry_vwap_ratio': row.get('entry_vwap_ratio', ''),
+                    'entry_pattern': str(row.get('entry_pattern', 'A')),
+                })
+
+        trade_count = len(trades)
+        win_count = sum(1 for t in trades if t['profit_loss'] > 0)
+        lose_count = sum(1 for t in trades if t['profit_loss'] <= 0)
+        total_pnl = sum(t['profit_loss'] for t in trades)
+        win_rate = win_count / trade_count * 100 if trade_count > 0 else 0
+
+        wallet_diff = None
+        if opening_wallet is not None and closing_wallet is not None:
+            wallet_diff = closing_wallet - opening_wallet
+
+        report = {
+            'date': today_str,
+            'trade_count': trade_count,
+            'win_count': win_count,
+            'lose_count': lose_count,
+            'win_rate': round(win_rate, 1),
+            'total_pnl': round(total_pnl, 1),
+            'opening_wallet': opening_wallet,
+            'closing_wallet': closing_wallet,
+            'wallet_diff': wallet_diff,
+            'take_profit_pct': take_profit_pct,
+            'stop_loss_pct': stop_loss_pct,
+            'trades': trades,
+        }
+
+        logger.info(f"日次レポート生成: {trade_count}件, 損益{total_pnl:+,.0f}円")
+        return report
+
     def monitor_positions(self):
         """
         保有ポジションを監視

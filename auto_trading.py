@@ -245,7 +245,11 @@ def main():
     except Exception as e:
         # API取得失敗時は固定予算を使用
         budget = 800_000
+        available_cash = None
         logger.warning(f"買付余力取得エラー、固定予算を使用: {e}")
+
+    # 開場時の買付余力を保存（日次レポート用）
+    opening_wallet = available_cash
 
     # STEP 4: TradeExecutor初期化
     logger.info("=" * 60)
@@ -287,6 +291,40 @@ def main():
         error_msg = f"取引監視ループエラー: {e}"
         logger.error(error_msg)
         notifier.send_error(f"⚠️ {error_msg}\nポジションを手動確認してください")
+
+    # STEP 7: 日次レポート生成・Discord通知
+    try:
+        logger.info("=" * 60)
+        logger.info("日次レポート生成")
+        logger.info("=" * 60)
+
+        # 終了時の買付余力を取得
+        closing_wallet = None
+        try:
+            client = KabuClient()
+            wallet = client.get_wallet_cash()
+            closing_wallet = wallet.get('stock_account_wallet')
+        except Exception as e:
+            logger.warning(f"終了時買付余力取得失敗: {e}")
+
+        report = executor.generate_daily_report(
+            opening_wallet=opening_wallet,
+            closing_wallet=closing_wallet
+        )
+
+        # JSON保存
+        import json
+        report_path = f"data/daily_report_{now.strftime('%Y%m%d')}.json"
+        os.makedirs("data", exist_ok=True)
+        with open(report_path, 'w', encoding='utf-8') as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+        logger.success(f"日次レポート保存: {report_path}")
+
+        # Discord通知
+        notifier.send_daily_report(report)
+
+    except Exception as e:
+        logger.error(f"日次レポート生成エラー: {e}")
 
     logger.info("=" * 60)
     logger.info("自動売買スクリプト正常終了")
