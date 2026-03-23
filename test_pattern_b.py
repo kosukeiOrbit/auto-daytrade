@@ -168,12 +168,12 @@ def main():
                 checks = []
                 entry_ok = True
 
-                # チェック1: VWAP
+                # チェック1: VWAP（0.2%バッファ許容）
                 if vwap is not None and vwap > 0:
-                    if current_price > vwap:
-                        checks.append(f"VWAP上✅")
+                    if current_price >= vwap * 0.998:
+                        checks.append(f"VWAP上✅（{current_price} >= {vwap:.0f}×0.998）")
                     else:
-                        checks.append(f"VWAP下❌")
+                        checks.append(f"VWAP下❌（{current_price} < {vwap:.0f}×0.998）")
                         entry_ok = False
                 else:
                     checks.append("VWAP不明⚠️")
