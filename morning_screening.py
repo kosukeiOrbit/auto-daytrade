@@ -61,29 +61,50 @@ def main():
     weekday_name = ['月', '火', '水', '木', '金', '土', '日'][target_date.weekday()]
     logger.info(f"スクリーニング対象日: {target_date.strftime('%Y-%m-%d')} ({weekday_name}・前営業日)")
 
-    # STEP 0: 買付余力取得（kabu Station API）
+    # STEP 0: 買付余力取得（kabu Station API → 前日レポートJSON → 固定予算）
     logger.info("\n" + "=" * 60)
     logger.info("STEP 0: 買付余力取得")
     logger.info("=" * 60)
 
+    available_cash = None
     try:
         kabu_client = KabuClient()
         wallet = kabu_client.get_wallet_cash()
         available_cash = wallet['stock_account_wallet']
 
-        # 検証環境の場合（nullの場合）は固定予算を使用
-        if available_cash is None:
-            budget = 800_000
-            logger.warning(f"検証環境のため固定予算を使用: {budget:,}円")
-        else:
-            # 本番環境: 買付余力 × 投資比率
+        if available_cash is not None:
             budget = int(available_cash * Config.INVESTMENT_RATIO)
             logger.info(f"買付余力: {available_cash:,}円 × {Config.INVESTMENT_RATIO} = 本日の投資予算: {budget:,}円")
+        else:
+            logger.warning("検証環境（買付余力null）、フォールバックへ")
 
     except Exception as e:
-        # API取得失敗時は固定予算を使用
+        logger.warning(f"買付余力取得エラー: {e}")
+
+    # フォールバック1: 前日レポートJSONから closing_wallet を取得
+    if available_cash is None:
+        import json
+        for days_back in range(1, 8):
+            report_date = (now - timedelta(days=days_back)).strftime('%Y%m%d')
+            report_path = f"data/daily_report_{report_date}.json"
+            if os.path.exists(report_path):
+                try:
+                    with open(report_path, 'r', encoding='utf-8') as f:
+                        report = json.load(f)
+                    closing_wallet = report.get('closing_wallet')
+                    if closing_wallet is not None and closing_wallet > 0:
+                        available_cash = closing_wallet
+                        budget = int(available_cash * Config.INVESTMENT_RATIO)
+                        logger.info(f"前日レポートから買付余力を取得: {closing_wallet:,}円（{report_date}）")
+                        logger.info(f"投資予算: {budget:,}円")
+                        break
+                except Exception as e:
+                    logger.debug(f"レポート読み込み失敗 {report_path}: {e}")
+
+    # フォールバック2: 固定予算
+    if available_cash is None:
         budget = 800_000
-        logger.warning(f"買付余力取得エラー、固定予算を使用: {e}")
+        logger.warning("前日レポートも取得できず、固定予算を使用: 800,000円")
 
     # STEP 1a: 出来高急増銘柄を抽出
     logger.info("\n" + "=" * 60)
