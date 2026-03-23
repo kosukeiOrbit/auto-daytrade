@@ -897,13 +897,29 @@ class TradeExecutor:
 
     # ========== パターンB エントリーロジック ==========
 
+    def _is_etf(self, symbol, symbol_name):
+        """ETF/ETN/REITかどうか判定"""
+        etf_keywords = ['ETF', 'ETN', '投信', '債券', 'リート', 'REIT',
+                        'インデックス', 'ヘッジ', 'ブル', 'ベア', 'レバレッジ',
+                        '先進国', '新興国', 'ナスダック', 'S&P', 'TOPIX']
+        for keyword in etf_keywords:
+            if keyword in symbol_name:
+                return True
+        try:
+            code = int(symbol)
+            if code < 1000 or code > 9999:
+                return True
+        except ValueError:
+            return True
+        return False
+
     def scan_pattern_b_candidates(self):
         """
         パターンB: 売買高急増ランキングから候補銘柄を検知し、
         価格履歴を蓄積する。
 
         Returns:
-            list: ランキング上位10銘柄のシンボルリスト
+            list: 個別株上位10銘柄のシンボルリスト
         """
         try:
             ranking = self.kabu_client.get_ranking(ranking_type=6, exchange_division="ALL")
@@ -911,9 +927,18 @@ class TradeExecutor:
             if not ranking:
                 return []
 
-            # 上位10銘柄のみ監視
+            # ETFを除外して個別株上位10件を選択
+            individual_stocks = []
+            for item in ranking[:20]:
+                symbol = item['symbol']
+                symbol_name = item.get('symbol_name', '')
+                if not self._is_etf(symbol, symbol_name):
+                    individual_stocks.append(item)
+                if len(individual_stocks) >= 10:
+                    break
+
             top_symbols = []
-            for item in ranking[:10]:
+            for item in individual_stocks:
                 symbol = item['symbol']
                 top_symbols.append(symbol)
 
@@ -935,10 +960,12 @@ class TradeExecutor:
                         'volume': delta_volume,  # 差分出来高（その分の出来高）
                         'vwap': board.get('vwap'),
                         'opening_price': board.get('opening_price'),
+                        'rapid_trade_pct': item.get('rapid_trade_pct', 0),
                     }
                     logger.debug(
                         f"パターンB {symbol}: 始値={price_record['opening_price']}, "
-                        f"現在値={price_record['price']}, 出来高差分={delta_volume}"
+                        f"現在値={price_record['price']}, 出来高差分={delta_volume}, "
+                        f"RapidTrade={price_record['rapid_trade_pct']:.1f}%"
                     )
 
                     # 価格履歴に追加（銘柄ごと）
@@ -1028,16 +1055,24 @@ class TradeExecutor:
             logger.debug(f"パターンB {symbol}: 上昇本数不足（{up_count}/4）")
             return False
 
-        # 条件4: 出来高急増（直近履歴の平均の2倍以上）
-        volumes = [r['volume'] for r in history if r.get('volume', 0) > 0]
-        if len(volumes) >= 5:
-            avg_volume = sum(volumes[:-1]) / len(volumes[:-1])  # 最新を除いた平均
-            latest_volume = volumes[-1]
-            if avg_volume > 0 and latest_volume < avg_volume * 2.0:
-                logger.debug(f"パターンB {symbol}: 出来高急増なし（{latest_volume:.0f} < {avg_volume:.0f} × 2.0）")
+        # 条件4: 出来高急増（RapidTradePercentage優先、フォールバックで差分計算）
+        latest_rapid = latest.get('rapid_trade_pct', 0)
+        if latest_rapid > 0:
+            # ランキングAPIの値を使用（100% = 通常の2倍）
+            if latest_rapid < 100:
+                logger.debug(f"パターンB {symbol}: 出来高急増不足（RapidTradePct={latest_rapid:.1f}%）")
                 return False
+        else:
+            # フォールバック：自前の差分計算
+            volumes = [r['volume'] for r in history if r.get('volume', 0) > 0]
+            if len(volumes) >= 5:
+                avg_volume = sum(volumes[:-1]) / len(volumes[:-1])
+                latest_volume = volumes[-1]
+                if avg_volume > 0 and latest_volume < avg_volume * 2.0:
+                    logger.debug(f"パターンB {symbol}: 出来高急増なし（差分計算: {latest_volume:.0f} < {avg_volume:.0f} × 2.0）")
+                    return False
 
-        logger.info(f"パターンB {symbol}: エントリー条件充足（価格{current_price}, VWAP{vwap}, 5本上昇, 出来高OK）")
+        logger.info(f"パターンB {symbol}: エントリー条件充足（価格{current_price}, VWAP{vwap}, 5本上昇, RapidTrade={latest_rapid:.0f}%）")
         return True
 
     def execute_pattern_b_entry(self, symbol):

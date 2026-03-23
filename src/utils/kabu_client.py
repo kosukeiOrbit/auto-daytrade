@@ -502,6 +502,7 @@ class KabuClient:
                         'current_price': item.get('CurrentPrice', 0),
                         'change_pct': item.get('ChangePercentage', 0),
                         'trading_volume': item.get('TradingVolume', 0),
+                        'rapid_trade_pct': item.get('RapidTradePercentage', 0),
                     })
 
                 logger.debug(f"ランキング取得成功: {len(result)}件")
