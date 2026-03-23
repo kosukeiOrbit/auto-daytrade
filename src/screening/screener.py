@@ -176,8 +176,8 @@ class Screener:
             jst = tz.gettz("Asia/Tokyo")
             date = datetime.now(jst)
 
-        # 過去データ取得（平均計算用に余裕を持って取得）
-        start_date = date - timedelta(days=lookback_days + 10)
+        # 過去データ取得（平均計算用に余裕を持って取得、祝日連続を考慮して+15日）
+        start_date = date - timedelta(days=lookback_days + 15)
 
         logger.info(f"\n[1/5] 株価データ取得中（{start_date.strftime('%Y-%m-%d')} 〜 {date.strftime('%Y-%m-%d')}）...")
 
