@@ -35,7 +35,7 @@ from src.utils.config import Config
 
 # パターンBエントリー（場中の動意銘柄）のフラグ
 # True に変更するだけで有効化できる。本番実績を積んでから有効化すること。
-PATTERN_B_ENABLED = False
+PATTERN_B_ENABLED = True
 
 # ログファイル設定
 log_dir = "logs"
