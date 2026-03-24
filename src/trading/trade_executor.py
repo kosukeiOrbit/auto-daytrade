@@ -1010,7 +1010,7 @@ class TradeExecutor:
             if not ranking:
                 return []
 
-            # 50件全体→ETF/低位株除外→board取得→時価総額フィルタ→上位10件
+            # 50件全体→ETF/低位株/薄商い除外→board取得→上位10件
             # 全フィルタ通過後に10件を確定する
             top_symbols = []
             for item in ranking:
@@ -1031,18 +1031,18 @@ class TradeExecutor:
                     logger.debug(f"パターンB除外（低位株）: {symbol} 現在値{current_price}円")
                     continue
 
+                # 売買代金フィルタ（3,000万円以上）
+                trading_volume = item.get('trading_volume', 0) or 0
+                turnover = current_price * trading_volume
+                if turnover < 30_000_000:
+                    logger.debug(f"パターンB除外（薄商い）: {symbol} 売買代金{turnover/10000:.0f}万円")
+                    continue
+
                 # /board で詳細情報取得
                 try:
                     board = self.kabu_client.get_symbol(symbol)
                 except Exception as e:
                     logger.debug(f"パターンB {symbol}: board取得失敗: {e}")
-                    time.sleep(0.3)
-                    continue
-
-                # 時価総額フィルタ（50億円以上）
-                market_cap = board.get('market_cap_value') or 0
-                if market_cap > 0 and market_cap < 5_000_000_000:
-                    logger.debug(f"パターンB除外（時価総額不足）: {symbol} {market_cap/100000000:.0f}億円")
                     time.sleep(0.3)
                     continue
 
@@ -1053,12 +1053,7 @@ class TradeExecutor:
                     f"現在値={board.get('current_price')}円 "
                     f"VWAP={board.get('vwap')} "
                     f"始値={board.get('opening_price')} "
-                    f"時価総額={market_cap/100000000:.0f}億円" if market_cap > 0 else
-                    f"パターンB採用: {symbol} {board.get('symbol_name', '')} "
-                    f"現在値={board.get('current_price')}円 "
-                    f"VWAP={board.get('vwap')} "
-                    f"始値={board.get('opening_price')} "
-                    f"時価総額=不明"
+                    f"売買代金={turnover/10000:.0f}万円"
                 )
 
                 # 累積出来高→差分（その1分間の出来高）に変換
