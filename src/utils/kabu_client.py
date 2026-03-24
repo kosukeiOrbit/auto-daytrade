@@ -231,16 +231,24 @@ class KabuClient:
                 front_order_type_map = {1: 10, 2: 20, 3: 30}
                 front_order_type = front_order_type_map.get(order_type, 10)
 
+            # side による DelivType / FundType の切り替え
+            if side == 2:  # 買い
+                deliv_type = 2    # お預り金
+                fund_type = "02"  # お預り金（現物買い）
+            else:  # 売り（side=1）
+                deliv_type = 0    # 指定なし（現物売り）
+                fund_type = "  "  # 半角スペース2つ（現物売り必須）
+
             # 注文リクエストボディ
             order_data = {
-                "Password": self.api_password,  # 注文パスワード（APIパスワードと同じ）
+                "Password": self.api_password,
                 "Symbol": symbol,
                 "Exchange": exchange,
                 "SecurityType": 1,  # 1=株式
                 "Side": str(side),
                 "CashMargin": 1,  # 1=現物
-                "DelivType": 2,  # 2=お預り金
-                "FundType": "02",  # 02=お預り金（現物取引）
+                "DelivType": deliv_type,
+                "FundType": fund_type,
                 "AccountType": 4,  # 4=特定
                 "Qty": qty,
                 "FrontOrderType": front_order_type,  # 10=成行, 20=指値, 30=逆指値
