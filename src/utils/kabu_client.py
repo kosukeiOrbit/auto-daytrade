@@ -240,7 +240,7 @@ class KabuClient:
                 "Side": str(side),
                 "CashMargin": 1,  # 1=現物
                 "DelivType": 2,  # 2=お預り金
-                "FundType": "AA",  # AA=信用代用（現物買の場合は必須）
+                "FundType": "02",  # 02=お預り金（現物取引）
                 "AccountType": 4,  # 4=特定
                 "Qty": qty,
                 "FrontOrderType": front_order_type,  # 10=成行, 20=指値, 30=逆指値
