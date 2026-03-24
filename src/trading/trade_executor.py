@@ -1047,13 +1047,23 @@ class TradeExecutor:
                     time.sleep(0.3)
                     continue
 
+                # 寄りからの上昇率フィルター（+3%超えは除外・高値掴み防止）
+                current_price_board = board.get('current_price') or 0
+                opening_price = board.get('opening_price') or 0
+                if opening_price > 0 and current_price_board > 0:
+                    change_from_open = (current_price_board - opening_price) / opening_price * 100
+                    if change_from_open > 3.0:
+                        logger.debug(f"パターンB除外（高値）: {symbol} 寄りから+{change_from_open:.1f}%")
+                        time.sleep(0.3)
+                        continue
+
                 # 全フィルタ通過 → 採用
                 top_symbols.append(symbol)
                 logger.info(
                     f"パターンB採用: {symbol} {board.get('symbol_name', '')} "
-                    f"現在値={board.get('current_price')}円 "
+                    f"現在値={current_price_board}円 "
                     f"VWAP={board.get('vwap')} "
-                    f"始値={board.get('opening_price')} "
+                    f"始値={opening_price} "
                     f"売買代金={turnover/10000:.0f}万円"
                 )
 
@@ -1165,7 +1175,7 @@ class TradeExecutor:
         up_count = sum(1 for i in range(len(prices) - 1) if prices[i + 1] > prices[i])
         is_uptrend = up_count >= 3  # 5本中3本以上
         if not is_uptrend:
-            logger.info(f"パターンB {symbol}: ❌トレンドなし（{up_count}/4）")
+            logger.info(f"パターンB {symbol}: ❌トレンドなし（直近5本で上昇{up_count}回）")
             return False
 
         # 条件4: 出来高急増（RapidTradePercentage優先、フォールバックで差分計算）
