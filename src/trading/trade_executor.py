@@ -286,8 +286,8 @@ class TradeExecutor:
             } or None
         """
         try:
-            # 銘柄情報取得
-            symbol_info = self.kabu_client.get_symbol(symbol, exchange)
+            # 銘柄情報取得（板情報はExchange=1で取得、発注はexchange引数を使用）
+            symbol_info = self.kabu_client.get_symbol(symbol, exchange=1)
             current_price = symbol_info['ask_price']  # 売気配値でエントリー
 
             # ポジションサイズ計算
