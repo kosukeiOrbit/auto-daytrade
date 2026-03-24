@@ -979,8 +979,9 @@ class TradeExecutor:
     def _is_etf(self, symbol, symbol_name):
         """ETF/ETN/REITかどうか判定"""
         etf_keywords = ['ETF', 'ETN', '投信', '上場投信', '債券', 'リート', 'REIT',
-                        'インデックス', 'ヘッジ', 'ブル', 'ベア', 'レバレッジ',
-                        '先進国', '新興国', 'ナスダック', 'S&P', 'TOPIX']
+                        'インデックス', 'インデックスファンド', 'ヘッジ', 'ブル', 'ベア',
+                        'レバレッジ', '先進国', '新興国', 'ナスダック', 'S&P', 'TOPIX',
+                        'MAXIS', 'NEXT', 'ダイワ', '野村', 'iシェアーズ']
         for keyword in etf_keywords:
             if keyword in symbol_name:
                 return True

@@ -175,11 +175,14 @@ class KabuClient:
                 return result
             else:
                 error_msg = f"銘柄情報取得失敗: {response.status_code} - {response.text}"
-                logger.error(error_msg)
+                if response.status_code == 400:
+                    logger.debug(error_msg)  # 銘柄が見つからない等はDEBUGレベル
+                else:
+                    logger.error(error_msg)
                 raise Exception(error_msg)
 
         except Exception as e:
-            logger.error(f"銘柄情報取得エラー: {e}")
+            logger.debug(f"銘柄情報取得エラー: {e}")
             raise
 
     def send_order(self, symbol, exchange, side, qty, order_type, price=0, stop_price=0):
