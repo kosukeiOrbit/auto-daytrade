@@ -127,10 +127,10 @@ class JQuantsClient:
         """
         財務情報を取得（発行済株式数を含む）
 
-        Note:
-            J-Quants API V2の /v2/fins/summary エンドポイントを使用
-            全銘柄のデータを取得するため、直近1年分を範囲取得
-            （全上場銘柄の最新財務情報をカバーするため）
+        優先順位:
+            1. pickleキャッシュ（30日以内）
+            2. ローカルCSVファイル（data/{YYYY}/fins_summary_*.csv.gz）
+            3. J-Quants API（フォールバック）
 
         Returns:
             DataFrame: 財務情報データ
@@ -138,19 +138,65 @@ class JQuantsClient:
                 - ShOutFY: 期末発行済株式数
                 - その他財務情報
         """
-        # キャッシュチェック
+        import os
+        import glob
+        import pandas as pd
+        from datetime import datetime, timedelta
+
+        # 1. pickleキャッシュチェック
         if self.use_cache:
             cached_data = self.cache_manager.get_financial_cache()
             if cached_data is not None:
                 logger.success(f"財務情報をキャッシュから取得: {len(cached_data)}件")
                 return cached_data
 
+        # 2. ローカルCSVファイルから読み込み
+        now = datetime.now(tz.gettz("Asia/Tokyo"))
+        local_dfs = []
+
+        # 2a. 直近7日の日次ファイルを探す
+        for days_back in range(7):
+            dt = now - timedelta(days=days_back)
+            filepath = f"data/{dt.year}/fins_summary_{dt.strftime('%Y%m%d')}.csv.gz"
+            if os.path.exists(filepath):
+                try:
+                    df = pd.read_csv(filepath)
+                    local_dfs.append(df)
+                    logger.info(f"財務情報ローカルCSV読み込み: {filepath} ({len(df)}件)")
+                except Exception as e:
+                    logger.warning(f"ローカルCSV読み込み失敗: {filepath}: {e}")
+
+        # 2b. 当月・前月の月次ファイルを探す
+        for months_back in range(0, 13):
+            dt = now - timedelta(days=months_back * 30)
+            filepath = f"data/{dt.year}/fins_summary_{dt.strftime('%Y%m')}.csv.gz"
+            if os.path.exists(filepath):
+                try:
+                    df = pd.read_csv(filepath)
+                    local_dfs.append(df)
+                    logger.info(f"財務情報ローカルCSV読み込み: {filepath} ({len(df)}件)")
+                except Exception as e:
+                    logger.warning(f"ローカルCSV読み込み失敗: {filepath}: {e}")
+
+        if local_dfs:
+            df_all = pd.concat(local_dfs, ignore_index=True)
+            # 各銘柄の最新データのみ残す（DiscDateが最新のもの）
+            if 'DiscDate' in df_all.columns:
+                df_all['DiscDate'] = pd.to_datetime(df_all['DiscDate'], errors='coerce')
+                df_all = df_all.sort_values('DiscDate').groupby('Code').tail(1).reset_index(drop=True)
+            logger.success(f"財務情報をローカルCSVから取得: {len(df_all)}件 ({df_all['Code'].nunique()}銘柄)")
+
+            # キャッシュに保存
+            if self.use_cache:
+                self.cache_manager.save_financial_cache(df_all)
+
+            return df_all
+
+        # 3. APIフォールバック
         try:
             logger.info("財務情報をAPIから取得中（直近1年分）...")
 
-            # 直近1年分のデータを取得（全上場銘柄の最新財務情報をカバーするため）
-            from datetime import datetime, timedelta
-            end_dt = datetime.now(tz.gettz("Asia/Tokyo"))
+            end_dt = now
             start_dt = end_dt - timedelta(days=365)
 
             df = self.client.get_fin_summary_range(start_dt=start_dt, end_dt=end_dt)
