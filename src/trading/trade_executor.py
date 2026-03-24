@@ -3,6 +3,7 @@
 candidates_YYYYMMDD.csv を読み込み、エントリー判定・注文実行
 """
 import os
+import time
 import pandas as pd
 from datetime import datetime, timedelta
 from loguru import logger
