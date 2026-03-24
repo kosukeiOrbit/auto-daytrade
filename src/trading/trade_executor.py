@@ -983,7 +983,8 @@ class TradeExecutor:
                         'レバレッジ', '先進国', '新興国', 'ナスダック', 'S&P', 'TOPIX',
                         'MAXIS', 'NEXT', 'ダイワ', '野村', 'iシェアーズ',
                         # 短縮名対応
-                        'ＭＸ', 'ＮＦ', 'ＳＭＤ', '上場', '国債', '米債']
+                        'ＭＸ', 'ＮＦ', 'ＳＭＤ', '上場', '国債', '米債',
+                        'ｉＦ', 'インバース', 'ダブルインバース']
         for keyword in etf_keywords:
             if keyword in symbol_name:
                 return True
