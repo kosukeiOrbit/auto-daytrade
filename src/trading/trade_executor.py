@@ -1005,20 +1005,30 @@ class TradeExecutor:
             list: 個別株上位10銘柄のシンボルリスト
         """
         try:
-            ranking = self.kabu_client.get_ranking(ranking_type=6, exchange_division="ALL")
+            ranking = self.kabu_client.get_ranking(ranking_type=6, exchange_division="ALL", limit=50)
 
             if not ranking:
                 return []
 
-            # ETFを除外して個別株上位10件を選択
-            individual_stocks = []
-            for item in ranking[:20]:
+            # 50件全体からフィルタリング→個別株上位10件を選択
+            # STEP1: ETFフィルタ
+            candidates = []
+            for item in ranking:
                 symbol = item['symbol']
                 symbol_name = item.get('symbol_name', '')
-                if not self._is_etf(symbol, symbol_name):
-                    individual_stocks.append(item)
-                if len(individual_stocks) >= 10:
-                    break
+                if self._is_etf(symbol, symbol_name):
+                    logger.debug(f"パターンB除外（ETF）: {symbol} {symbol_name}")
+                    continue
+                # 株価フィルタ（200円以上）
+                current_price = item.get('current_price', 0) or 0
+                if current_price < 200:
+                    logger.debug(f"パターンB除外（低位株）: {symbol} 現在値{current_price}円")
+                    continue
+                candidates.append(item)
+
+            # 上位10件を選択
+            individual_stocks = candidates[:10]
+            logger.info(f"パターンBスキャン: ランキング{len(ranking)}件→ETF/低位株除外→個別株{len(individual_stocks)}件")
 
             top_symbols = []
             for item in individual_stocks:
@@ -1028,6 +1038,14 @@ class TradeExecutor:
                 # /board で詳細情報取得
                 try:
                     board = self.kabu_client.get_symbol(symbol)
+
+                    # 時価総額フィルタ（50億円以上）
+                    market_cap = board.get('market_cap_value') or 0
+                    if market_cap > 0 and market_cap < 5_000_000_000:
+                        logger.debug(f"パターンB除外（時価総額不足）: {symbol} {market_cap/100000000:.0f}億円")
+                        top_symbols.remove(symbol)
+                        time.sleep(0.3)
+                        continue
 
                     # 累積出来高→差分（その1分間の出来高）に変換
                     current_cumulative = board.get('trading_volume', 0) or 0
@@ -1040,7 +1058,7 @@ class TradeExecutor:
                     price_record = {
                         'time': datetime.now(),
                         'price': board.get('current_price'),
-                        'volume': delta_volume,  # 差分出来高（その分の出来高）
+                        'volume': delta_volume,
                         'vwap': board.get('vwap'),
                         'opening_price': board.get('opening_price'),
                         'rapid_trade_pct': item.get('rapid_trade_pct', 0),
@@ -1066,7 +1084,7 @@ class TradeExecutor:
                 except Exception as e:
                     logger.debug(f"パターンB {symbol}: board取得失敗: {e}")
 
-                time.sleep(0.3)  # API レート制限対策（10銘柄×0.3秒=3秒/ラウンド）
+                time.sleep(0.3)  # API レート制限対策
 
             # ランキングから外れた銘柄の履歴を削除
             for symbol in list(self.pattern_b_price_history.keys()):

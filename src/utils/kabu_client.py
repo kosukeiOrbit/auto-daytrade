@@ -177,7 +177,8 @@ class KabuClient:
                     'vwap': board_data.get('VWAP'),
                     'opening_price': board_data.get('OpeningPrice'),
                     'upper_limit': board_data.get('UpperLimit'),
-                    'lower_limit': board_data.get('LowerLimit')
+                    'lower_limit': board_data.get('LowerLimit'),
+                    'market_cap_value': board_data.get('MarketCapValue')
                 }
 
                 logger.info(f"銘柄情報取得成功: {result['symbol']} {result['symbol_name']} 現在値={result['current_price']}円")
@@ -443,7 +444,7 @@ class KabuClient:
             logger.error(f"注文一覧取得エラー: {e}")
             return []
 
-    def get_ranking(self, ranking_type=6, exchange_division="ALL"):
+    def get_ranking(self, ranking_type=6, exchange_division="ALL", limit=50):
         """
         ランキング情報を取得
 
@@ -466,7 +467,8 @@ class KabuClient:
             url = f"{self.api_url}/ranking"
             params = {
                 "Type": ranking_type,
-                "ExchangeDivision": exchange_division
+                "ExchangeDivision": exchange_division,
+                "Count": limit
             }
 
             response = self._api_request(requests.get, url, params=params)
