@@ -258,8 +258,13 @@ class KabuClient:
 
             # 逆指値の場合
             if order_type == 3:
-                order_data["TriggerPrice"] = stop_price
-                order_data["UnderOver"] = 2 if side == 1 else 1  # 売=2(以下), 買=1(以上)
+                order_data["ReverseLimitOrder"] = {
+                    "TriggerSec": 1,
+                    "TriggerPrice": stop_price,
+                    "UnderOver": 2 if side == 1 else 1,  # 売=2(以下), 買=1(以上)
+                    "AfterHitOrderType": 1,  # 1=成行
+                    "AfterHitPrice": 0
+                }
 
             body = json.dumps(order_data)
 
@@ -412,7 +417,7 @@ class KabuClient:
         """
         try:
             url = f"{self.api_url}/orders"
-            params = {}
+            params = {'details': 'true'}
             if symbol:
                 params['product'] = 0  # 0=すべて
                 params['symbol'] = symbol
