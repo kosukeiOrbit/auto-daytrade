@@ -97,13 +97,13 @@ class PatternBBacktest:
         # 2. 現在値 > VWAP
         vwap_series = self._calc_vwap(bars.iloc[:idx + 1])
         current_vwap = vwap_series.iloc[-1]
-        if pd.isna(current_vwap) or current_price <= current_vwap:
+        if pd.isna(current_vwap) or current_price < current_vwap * 0.998:
             return False
 
         # 3. 寄り付きから+3%以内
         if opening_price > 0:
             gap_pct = (current_price / opening_price - 1) * 100
-            if gap_pct > self.max_gap_from_open_pct or gap_pct < 0:
+            if gap_pct > self.max_gap_from_open_pct:
                 return False
 
         # 4. 直近5本の上昇トレンド（3本以上切り上がり）
