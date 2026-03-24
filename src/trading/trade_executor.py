@@ -1010,81 +1010,82 @@ class TradeExecutor:
             if not ranking:
                 return []
 
-            # 50件全体からフィルタリング→個別株上位10件を選択
-            # STEP1: ETFフィルタ
-            candidates = []
+            # 50件全体→ETF/低位株除外→board取得→時価総額フィルタ→上位10件
+            # 全フィルタ通過後に10件を確定する
+            top_symbols = []
             for item in ranking:
+                if len(top_symbols) >= 10:
+                    break
+
                 symbol = item['symbol']
                 symbol_name = item.get('symbol_name', '')
+
+                # ETFフィルタ
                 if self._is_etf(symbol, symbol_name):
                     logger.debug(f"パターンB除外（ETF）: {symbol} {symbol_name}")
                     continue
+
                 # 株価フィルタ（200円以上）
                 current_price = item.get('current_price', 0) or 0
                 if current_price < 200:
                     logger.debug(f"パターンB除外（低位株）: {symbol} 現在値{current_price}円")
                     continue
-                candidates.append(item)
-
-            # 上位10件を選択
-            individual_stocks = candidates[:10]
-            logger.info(f"パターンBスキャン: ランキング{len(ranking)}件→ETF/低位株除外→個別株{len(individual_stocks)}件")
-
-            top_symbols = []
-            for item in individual_stocks:
-                symbol = item['symbol']
-                top_symbols.append(symbol)
 
                 # /board で詳細情報取得
                 try:
                     board = self.kabu_client.get_symbol(symbol)
-
-                    # 時価総額フィルタ（50億円以上）
-                    market_cap = board.get('market_cap_value') or 0
-                    if market_cap > 0 and market_cap < 5_000_000_000:
-                        logger.debug(f"パターンB除外（時価総額不足）: {symbol} {market_cap/100000000:.0f}億円")
-                        top_symbols.remove(symbol)
-                        time.sleep(0.3)
-                        continue
-
-                    # 累積出来高→差分（その1分間の出来高）に変換
-                    current_cumulative = board.get('trading_volume', 0) or 0
-                    last_cumulative = self.pattern_b_last_volume.get(symbol, 0)
-                    delta_volume = current_cumulative - last_cumulative
-                    if delta_volume < 0:
-                        delta_volume = 0  # リセット時は0として扱う（過大評価防止）
-                    self.pattern_b_last_volume[symbol] = current_cumulative
-
-                    price_record = {
-                        'time': datetime.now(),
-                        'price': board.get('current_price'),
-                        'volume': delta_volume,
-                        'vwap': board.get('vwap'),
-                        'opening_price': board.get('opening_price'),
-                        'rapid_trade_pct': item.get('rapid_trade_pct', 0),
-                    }
-                    logger.debug(
-                        f"パターンB {symbol}: 始値={price_record['opening_price']}, "
-                        f"現在値={price_record['price']}, 出来高差分={delta_volume}, "
-                        f"RapidTrade={price_record['rapid_trade_pct']:.1f}%"
-                    )
-
-                    # 価格履歴に追加（銘柄ごと）
-                    if symbol not in self.pattern_b_price_history:
-                        self.pattern_b_price_history[symbol] = []
-                    self.pattern_b_price_history[symbol].append(price_record)
-
-                    # 直近25分のデータのみ保持（20分平均+バッファ）
-                    cutoff = datetime.now() - timedelta(minutes=25)
-                    self.pattern_b_price_history[symbol] = [
-                        r for r in self.pattern_b_price_history[symbol]
-                        if r['time'] >= cutoff
-                    ]
-
                 except Exception as e:
                     logger.debug(f"パターンB {symbol}: board取得失敗: {e}")
+                    time.sleep(0.3)
+                    continue
+
+                # 時価総額フィルタ（50億円以上）
+                market_cap = board.get('market_cap_value') or 0
+                if market_cap > 0 and market_cap < 5_000_000_000:
+                    logger.debug(f"パターンB除外（時価総額不足）: {symbol} {market_cap/100000000:.0f}億円")
+                    time.sleep(0.3)
+                    continue
+
+                # 全フィルタ通過 → 採用
+                top_symbols.append(symbol)
+
+                # 累積出来高→差分（その1分間の出来高）に変換
+                current_cumulative = board.get('trading_volume', 0) or 0
+                last_cumulative = self.pattern_b_last_volume.get(symbol, 0)
+                delta_volume = current_cumulative - last_cumulative
+                if delta_volume < 0:
+                    delta_volume = 0
+                self.pattern_b_last_volume[symbol] = current_cumulative
+
+                price_record = {
+                    'time': datetime.now(),
+                    'price': board.get('current_price'),
+                    'volume': delta_volume,
+                    'vwap': board.get('vwap'),
+                    'opening_price': board.get('opening_price'),
+                    'rapid_trade_pct': item.get('rapid_trade_pct', 0),
+                }
+                logger.debug(
+                    f"パターンB {symbol}: 始値={price_record['opening_price']}, "
+                    f"現在値={price_record['price']}, 出来高差分={delta_volume}, "
+                    f"RapidTrade={price_record['rapid_trade_pct']:.1f}%"
+                )
+
+                # 価格履歴に追加（銘柄ごと）
+                if symbol not in self.pattern_b_price_history:
+                    self.pattern_b_price_history[symbol] = []
+                self.pattern_b_price_history[symbol].append(price_record)
+
+                # 直近25分のデータのみ保持（20分平均+バッファ）
+                cutoff = datetime.now() - timedelta(minutes=25)
+                self.pattern_b_price_history[symbol] = [
+                    r for r in self.pattern_b_price_history[symbol]
+                    if r['time'] >= cutoff
+                ]
 
                 time.sleep(0.3)  # API レート制限対策
+
+            logger.info(f"パターンBスキャン: ランキング{len(ranking)}件→フィルタ通過{len(top_symbols)}件")
 
             # ランキングから外れた銘柄の履歴を削除
             for symbol in list(self.pattern_b_price_history.keys()):
