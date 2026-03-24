@@ -25,6 +25,25 @@ class KabuClient:
 
         logger.info(f"kabu Station API クライアントを初期化しました (URL: {self.api_url})")
 
+    def _api_request(self, method, url, **kwargs):
+        """
+        API リクエストを送信（401時にトークンリフレッシュして1回リトライ）
+        """
+        token = self.get_token()
+        headers = kwargs.pop('headers', {})
+        headers['Content-Type'] = 'application/json'
+        headers['X-API-KEY'] = token
+
+        response = method(url, headers=headers, timeout=10, **kwargs)
+
+        if response.status_code == 401:
+            logger.warning("APIキー不一致（401）→ トークンをリフレッシュしてリトライ")
+            token = self.get_token(force_refresh=True)
+            headers['X-API-KEY'] = token
+            response = method(url, headers=headers, timeout=10, **kwargs)
+
+        return response
+
     def get_token(self, force_refresh=False):
         """
         APIトークンを取得
@@ -38,10 +57,12 @@ class KabuClient:
         Raises:
             Exception: トークン取得に失敗した場合
         """
-        # 既存のトークンがあり、強制更新でない場合はそれを返す
-        if self.token and not force_refresh:
-            logger.debug("既存のAPIトークンを使用")
-            return self.token
+        # 既存のトークンがあり、強制更新でなく、5分以内なら再利用
+        if self.token and not force_refresh and self.token_expires_at:
+            elapsed = (datetime.now() - self.token_expires_at).total_seconds()
+            if elapsed < 300:  # 5分以内
+                logger.debug("既存のAPIトークンを使用")
+                return self.token
 
         logger.info("APIトークンを取得中...")
 
@@ -86,16 +107,10 @@ class KabuClient:
         Raises:
             Exception: 取得に失敗した場合
         """
-        token = self.get_token()
-
         try:
             url = f"{self.api_url}/wallet/cash"
-            headers = {
-                "Content-Type": "application/json",
-                "X-API-KEY": token
-            }
 
-            response = requests.get(url, headers=headers, timeout=10)
+            response = self._api_request(requests.get, url)
 
             if response.status_code == 200:
                 wallet_data = response.json()
@@ -143,17 +158,11 @@ class KabuClient:
         Raises:
             Exception: 取得に失敗した場合
         """
-        token = self.get_token()
-
         try:
             # リアルタイム価格取得には /board エンドポイントを使用
             url = f"{self.api_url}/board/{symbol}@{exchange}"
-            headers = {
-                "Content-Type": "application/json",
-                "X-API-KEY": token
-            }
 
-            response = requests.get(url, headers=headers, timeout=10)
+            response = self._api_request(requests.get, url)
 
             if response.status_code == 200:
                 board_data = response.json()
@@ -209,14 +218,8 @@ class KabuClient:
         Raises:
             Exception: 発注に失敗した場合
         """
-        token = self.get_token()
-
         try:
             url = f"{self.api_url}/sendorder"
-            headers = {
-                "Content-Type": "application/json",
-                "X-API-KEY": token
-            }
 
             # order_typeをAPIのFrontOrderTypeに変換
             # 1=成行 → 10, 2=指値 → 20, 3=逆指値 → 30
@@ -254,7 +257,7 @@ class KabuClient:
             logger.info(f"注文発注: {symbol} {'買' if side == 2 else '売'} {qty}株 種類={order_type} (FrontOrderType={front_order_type})")
             logger.debug(f"注文データ: {order_data}")
 
-            response = requests.post(url, headers=headers, data=body, timeout=10)
+            response = self._api_request(requests.post, url, data=body)
 
             if response.status_code == 200:
                 order_result = response.json()
@@ -296,14 +299,8 @@ class KabuClient:
         Raises:
             Exception: 取消に失敗した場合
         """
-        token = self.get_token()
-
         try:
             url = f"{self.api_url}/cancelorder"
-            headers = {
-                "Content-Type": "application/json",
-                "X-API-KEY": token
-            }
 
             cancel_data = {
                 "OrderId": order_id,
@@ -314,7 +311,7 @@ class KabuClient:
 
             logger.info(f"注文取消: 注文番号={order_id}")
 
-            response = requests.put(url, headers=headers, data=body, timeout=10)
+            response = self._api_request(requests.put, url, data=body)
 
             if response.status_code == 200:
                 cancel_result = response.json()
@@ -361,16 +358,10 @@ class KabuClient:
         Raises:
             Exception: 取得に失敗した場合
         """
-        token = self.get_token()
-
         try:
             url = f"{self.api_url}/positions"
-            headers = {
-                "Content-Type": "application/json",
-                "X-API-KEY": token
-            }
 
-            response = requests.get(url, headers=headers, timeout=10)
+            response = self._api_request(requests.get, url)
 
             if response.status_code == 200:
                 positions_data = response.json()
@@ -410,20 +401,14 @@ class KabuClient:
         Returns:
             list: 注文リスト
         """
-        token = self.get_token()
-
         try:
             url = f"{self.api_url}/orders"
-            headers = {
-                "Content-Type": "application/json",
-                "X-API-KEY": token
-            }
             params = {}
             if symbol:
                 params['product'] = 0  # 0=すべて
                 params['symbol'] = symbol
 
-            response = requests.get(url, headers=headers, params=params, timeout=10)
+            response = self._api_request(requests.get, url, params=params)
 
             if response.status_code == 200:
                 orders = response.json()
@@ -477,20 +462,14 @@ class KabuClient:
                     'trading_volume': float,
                 }]
         """
-        token = self.get_token()
-
         try:
             url = f"{self.api_url}/ranking"
-            headers = {
-                "Content-Type": "application/json",
-                "X-API-KEY": token
-            }
             params = {
                 "Type": ranking_type,
                 "ExchangeDivision": exchange_division
             }
 
-            response = requests.get(url, headers=headers, params=params, timeout=10)
+            response = self._api_request(requests.get, url, params=params)
 
             if response.status_code == 200:
                 data = response.json()
