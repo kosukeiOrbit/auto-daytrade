@@ -268,7 +268,7 @@ class TradeExecutor:
         logger.info(f"ポジションサイズ: {qty}株 (現在値={current_price}円, 予算={usable_budget:,}円)")
         return qty
 
-    def entry_with_stop_and_target(self, symbol, exchange=9):
+    def entry_with_stop_and_target(self, symbol, exchange=1):
         """
         エントリー + 逆指値・利確注文セット
 
@@ -614,7 +614,7 @@ class TradeExecutor:
                     # 成行売り注文
                     self.kabu_client.send_order(
                         symbol=symbol,
-                        exchange=9,
+                        exchange=1,
                         side=1,  # 1=売
                         qty=qty,
                         order_type=1,  # 1=成行
@@ -674,7 +674,7 @@ class TradeExecutor:
                 # 成行売り注文
                 self.kabu_client.send_order(
                     symbol=symbol,
-                    exchange=9,
+                    exchange=1,
                     side=1,  # 1=売
                     qty=qty,
                     order_type=1,  # 1=成行
@@ -1226,7 +1226,7 @@ class TradeExecutor:
             logger.info(f"パターンB {symbol}: 成行エントリー {qty}株 @ {current_price}円")
             entry_result = self.kabu_client.send_order(
                 symbol=symbol,
-                exchange=9,
+                exchange=1,
                 side=2,  # 買
                 qty=qty,
                 order_type=1,  # 成行
@@ -1242,7 +1242,7 @@ class TradeExecutor:
             # 損切り -1%
             stop_price = int(current_price * 0.99)
             stop_result = self.kabu_client.send_order(
-                symbol=symbol, exchange=9, side=1, qty=qty,
+                symbol=symbol, exchange=1, side=1, qty=qty,
                 order_type=3, price=0, stop_price=stop_price
             )
 
@@ -1251,7 +1251,7 @@ class TradeExecutor:
                 self.notifier.send_error(f"🚨 パターンB {symbol}: 逆指値失敗！緊急決済")
                 try:
                     self.kabu_client.send_order(
-                        symbol=symbol, exchange=9, side=1, qty=qty,
+                        symbol=symbol, exchange=1, side=1, qty=qty,
                         order_type=1, price=0
                     )
                 except Exception as emergency_e:
@@ -1264,7 +1264,7 @@ class TradeExecutor:
             # 利確 +2%
             target_price = int(current_price * 1.02)
             target_result = self.kabu_client.send_order(
-                symbol=symbol, exchange=9, side=1, qty=qty,
+                symbol=symbol, exchange=1, side=1, qty=qty,
                 order_type=2, price=target_price
             )
             target_order_id = target_result['order_id'] if target_result['result_code'] == 0 else None
