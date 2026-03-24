@@ -141,7 +141,7 @@ class KabuClient:
 
         Args:
             symbol: 銘柄コード (例: "7203")
-            exchange: 市場コード (1=東証, デフォルト1)
+            exchange: 市場コード (9=SOR推奨, 1=東証は廃止)
 
         Returns:
             dict: {
@@ -201,7 +201,7 @@ class KabuClient:
 
         Args:
             symbol: 銘柄コード (例: "7203")
-            exchange: 市場コード (1=東証)
+            exchange: 市場コード (9=SOR推奨, 1=東証は廃止)
             side: 売買区分 (2=買, 1=売)
             qty: 数量
             order_type: 注文種類 (1=成行, 2=指値, 3=逆指値)
