@@ -977,14 +977,17 @@ class TradeExecutor:
     # ========== パターンB エントリーロジック ==========
 
     def _is_etf(self, symbol, symbol_name):
-        """ETF/ETN/REITかどうか判定"""
+        """ETF/ETN/REITかどうか判定（短縮名・正式名の両方に対応）"""
         etf_keywords = ['ETF', 'ETN', '投信', '上場投信', '債券', 'リート', 'REIT',
-                        'インデックス', 'インデックスファンド', 'ヘッジ', 'ブル', 'ベア',
+                        'インデックス', 'ファンド', 'ヘッジ', 'ブル', 'ベア',
                         'レバレッジ', '先進国', '新興国', 'ナスダック', 'S&P', 'TOPIX',
-                        'MAXIS', 'NEXT', 'ダイワ', '野村', 'iシェアーズ']
+                        'MAXIS', 'NEXT', 'ダイワ', '野村', 'iシェアーズ',
+                        # 短縮名対応
+                        'ＭＸ', 'ＮＦ', 'ＳＭＤ', '上場', '国債', '米債']
         for keyword in etf_keywords:
             if keyword in symbol_name:
                 return True
+        # 英数字混在コード（534A等）はETF/ETN
         try:
             code = int(symbol)
             if code < 1000 or code > 9999:
@@ -1111,7 +1114,7 @@ class TradeExecutor:
         # 条件1: 現在値がVWAPより上
         if vwap is not None and vwap > 0:
             if current_price < vwap * 0.998:
-                logger.debug(f"パターンB {symbol}: VWAP乖離不足（現在値{current_price} < VWAP{vwap} * 0.998）")
+                logger.info(f"パターンB {symbol}: ❌VWAP割れ（現在値{current_price} < VWAP{vwap:.0f}×0.998）")
                 return False
 
         # 条件2: 現在値が寄り付き値から+3%以内
@@ -1122,19 +1125,20 @@ class TradeExecutor:
         if opening_price and opening_price > 0:
             change_from_open = (current_price - opening_price) / opening_price * 100
             if change_from_open > 3.0:
-                logger.debug(f"パターンB {symbol}: 高値掴み防止（寄りから+{change_from_open:.1f}%）")
+                logger.info(f"パターンB {symbol}: ❌高値掴み防止（寄りから+{change_from_open:.1f}%）")
                 return False
 
         # 条件3: 直近5本が上昇トレンド（価格が切り上がっている）
         recent_5 = history[-5:]
         prices = [r['price'] for r in recent_5 if r['price'] is not None]
         if len(prices) < 5:
+            logger.info(f"パターンB {symbol}: ❌履歴不足（{len(prices)}/5本）")
             return False
 
         up_count = sum(1 for i in range(len(prices) - 1) if prices[i + 1] > prices[i])
         is_uptrend = up_count >= 3  # 5本中3本以上
         if not is_uptrend:
-            logger.debug(f"パターンB {symbol}: 上昇本数不足（{up_count}/4）")
+            logger.info(f"パターンB {symbol}: ❌トレンドなし（{up_count}/4）")
             return False
 
         # 条件4: 出来高急増（RapidTradePercentage優先、フォールバックで差分計算）
@@ -1142,7 +1146,7 @@ class TradeExecutor:
         if latest_rapid > 0:
             # ランキングAPIの値を使用（100% = 通常の2倍）
             if latest_rapid < 100:
-                logger.debug(f"パターンB {symbol}: 出来高急増不足（RapidTradePct={latest_rapid:.1f}%）")
+                logger.info(f"パターンB {symbol}: ❌出来高不足（RapidTrade={latest_rapid:.1f}%）")
                 return False
         else:
             # フォールバック：自前の差分計算
@@ -1151,7 +1155,7 @@ class TradeExecutor:
                 avg_volume = sum(volumes[:-1]) / len(volumes[:-1])
                 latest_volume = volumes[-1]
                 if avg_volume > 0 and latest_volume < avg_volume * 2.0:
-                    logger.debug(f"パターンB {symbol}: 出来高急増なし（差分計算: {latest_volume:.0f} < {avg_volume:.0f} × 2.0）")
+                    logger.info(f"パターンB {symbol}: ❌出来高不足（差分: {latest_volume:.0f} < {avg_volume:.0f}×2）")
                     return False
 
         logger.info(f"パターンB {symbol}: エントリー条件充足（価格{current_price}, VWAP{vwap}, 5本上昇, RapidTrade={latest_rapid:.0f}%）")
