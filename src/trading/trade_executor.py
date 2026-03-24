@@ -977,7 +977,7 @@ class TradeExecutor:
 
     def _is_etf(self, symbol, symbol_name):
         """ETF/ETN/REITかどうか判定"""
-        etf_keywords = ['ETF', 'ETN', '投信', '債券', 'リート', 'REIT',
+        etf_keywords = ['ETF', 'ETN', '投信', '上場投信', '債券', 'リート', 'REIT',
                         'インデックス', 'ヘッジ', 'ブル', 'ベア', 'レバレッジ',
                         '先進国', '新興国', 'ナスダック', 'S&P', 'TOPIX']
         for keyword in etf_keywords:
@@ -1060,6 +1060,8 @@ class TradeExecutor:
 
                 except Exception as e:
                     logger.debug(f"パターンB {symbol}: board取得失敗: {e}")
+
+                time.sleep(0.3)  # API レート制限対策（10銘柄×0.3秒=3秒/ラウンド）
 
             # ランキングから外れた銘柄の履歴を削除
             for symbol in list(self.pattern_b_price_history.keys()):
