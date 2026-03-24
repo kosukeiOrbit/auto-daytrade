@@ -1048,6 +1048,18 @@ class TradeExecutor:
 
                 # 全フィルタ通過 → 採用
                 top_symbols.append(symbol)
+                logger.info(
+                    f"パターンB採用: {symbol} {board.get('symbol_name', '')} "
+                    f"現在値={board.get('current_price')}円 "
+                    f"VWAP={board.get('vwap')} "
+                    f"始値={board.get('opening_price')} "
+                    f"時価総額={market_cap/100000000:.0f}億円" if market_cap > 0 else
+                    f"パターンB採用: {symbol} {board.get('symbol_name', '')} "
+                    f"現在値={board.get('current_price')}円 "
+                    f"VWAP={board.get('vwap')} "
+                    f"始値={board.get('opening_price')} "
+                    f"時価総額=不明"
+                )
 
                 # 累積出来高→差分（その1分間の出来高）に変換
                 current_cumulative = board.get('trading_volume', 0) or 0
