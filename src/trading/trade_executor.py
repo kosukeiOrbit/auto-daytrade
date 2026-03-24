@@ -1032,8 +1032,9 @@ class TradeExecutor:
                     continue
 
                 # 売買代金フィルタ（3,000万円以上）
+                # ランキングAPIのTradingVolumeは千株単位
                 trading_volume = item.get('trading_volume', 0) or 0
-                turnover = current_price * trading_volume
+                turnover = current_price * trading_volume * 1000
                 if turnover < 30_000_000:
                     logger.debug(f"パターンB除外（薄商い）: {symbol} 売買代金{turnover/10000:.0f}万円")
                     continue
