@@ -8,9 +8,9 @@
 3. 名前: "DayTrade Auto Trading 8:45"
 4. トリガー: 毎日 8:45
 5. 操作: プログラムの開始
-6. プログラム/スクリプト: C:\work\git\auto-daytrade\venv\Scripts\python.exe
+6. プログラム/スクリプト: C:/work/git/auto-daytrade/venv/Scripts/python.exe
 7. 引数の追加: auto_trading.py
-8. 開始: C:\work\git\auto-daytrade
+8. 開始: C:/work/git/auto-daytrade
 9. 完了
 
 【動作フロー】
