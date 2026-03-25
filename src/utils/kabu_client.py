@@ -234,7 +234,7 @@ class KabuClient:
             # side による DelivType / FundType の切り替え
             if side == 2:  # 買い
                 deliv_type = 2    # お預り金
-                fund_type = "02"  # お預り金（現物買い）
+                fund_type = "AA"  # 信用代用（現物買い・SOR注文で必須）
             else:  # 売り（side=1）
                 deliv_type = 0    # 指定なし（現物売り）
                 fund_type = "  "  # 半角スペース2つ（現物売り必須）
