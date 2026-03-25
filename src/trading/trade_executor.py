@@ -1093,6 +1093,12 @@ class TradeExecutor:
                     logger.debug(f"パターンB除外（低位株）: {symbol} 現在値{current_price}円")
                     continue
 
+                # 予算上限フィルター（1単元100株が予算内か）
+                # SOR成行のため値幅上限バッファとして80%を適用
+                if current_price * 100 > self.budget * 0.8:
+                    logger.debug(f"パターンB除外（予算超過）: {symbol} 現在値{current_price}円 必要額{current_price*100:,.0f}円 予算{self.budget*0.8:,.0f}円")
+                    continue
+
                 # 売買代金フィルタ（3,000万円以上）
                 # ランキングAPIのTradingVolumeは千株単位
                 trading_volume = item.get('trading_volume', 0) or 0
