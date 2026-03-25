@@ -1020,6 +1020,8 @@ class TradeExecutor:
                         'インデックス', 'ファンド', 'ヘッジ', 'ブル', 'ベア',
                         'レバレッジ', '先進国', '新興国', 'ナスダック', 'S&P', 'TOPIX',
                         'MAXIS', 'NEXT', 'ダイワ', '野村', 'iシェアーズ',
+                        # 全角対応
+                        'ＥＴＦ', 'ＥＴＮ', 'ＲＥＩＴ',
                         # 短縮名対応
                         'ＭＸ', 'ＮＦ', 'ＳＭＤ', '上場', '国債', '米債',
                         'ｉＦ', 'インバース', 'ダブルインバース']
@@ -1083,6 +1085,13 @@ class TradeExecutor:
                     board = self.kabu_client.get_symbol(symbol)
                 except Exception as e:
                     logger.debug(f"パターンB {symbol}: board取得失敗: {e}")
+                    time.sleep(0.3)
+                    continue
+
+                # board正式名でETF再チェック（短縮名で漏れたETFを捕捉）
+                full_name = board.get('symbol_name', '') or ''
+                if self._is_etf(symbol, full_name):
+                    logger.debug(f"パターンB除外（ETF・正式名）: {symbol} {full_name}")
                     time.sleep(0.3)
                     continue
 
