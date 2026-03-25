@@ -289,6 +289,23 @@ class KabuClient:
 
                 return result
             else:
+                # FundType='AA'で失敗した場合、'02'でフォールバック（買い注文のみ）
+                if side == 2 and fund_type == "AA":
+                    logger.warning(f"FundType='AA'失敗→'02'でリトライ: {response.status_code} {response.text[:80]}")
+                    order_data["FundType"] = "02"
+                    body = json.dumps(order_data)
+                    response2 = self._api_request(requests.post, url, data=body)
+                    if response2.status_code == 200:
+                        order_result = response2.json()
+                        result = {
+                            'order_id': order_result.get('OrderId'),
+                            'result_code': order_result.get('Result'),
+                            'result_msg': order_result.get('ResultMsg', '')
+                        }
+                        if result['result_code'] == 0:
+                            logger.success(f"注文発注成功（FundType='02'）: 注文番号={result['order_id']}")
+                        return result
+
                 error_msg = f"注文発注失敗: {response.status_code} - {response.text}"
                 logger.error(error_msg)
                 raise Exception(error_msg)

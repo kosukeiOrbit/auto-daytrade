@@ -322,11 +322,11 @@ class TradeExecutor:
             # 利確価格（+2%）デイトレルール（R倍数2.0）
             target_price = int(current_price * 1.02)
 
-            # 逆指値（損切り）注文
+            # 逆指値（損切り）注文 ※SOR非対応のためExchange=1（東証）で発注
             logger.info(f"{symbol}: 逆指値注文 {qty}株 @ {stop_price}円以下で成行売")
             stop_result = self.kabu_client.send_order(
                 symbol=symbol,
-                exchange=exchange,
+                exchange=1,  # 逆指値はSOR非対応のため東証
                 side=1,  # 1=売
                 qty=qty,
                 order_type=3,  # 3=逆指値
@@ -338,15 +338,45 @@ class TradeExecutor:
                 # 逆指値失敗 → 即座に成行で反対売買して緊急決済
                 logger.error(f"{symbol}: 逆指値注文失敗！緊急決済を実行")
                 self.notifier.send_error(f"🚨 {symbol}: 逆指値注文失敗！損切なしポジション回避のため緊急決済")
+                emergency_success = False
                 try:
-                    self.kabu_client.send_order(
+                    emergency_result = self.kabu_client.send_order(
                         symbol=symbol, exchange=exchange, side=1, qty=qty,
                         order_type=1, price=0  # 成行売り
                     )
+                    if emergency_result.get('result_code') == 0:
+                        emergency_success = True
+                        logger.info(f"{symbol}: 緊急決済成功")
                 except Exception as emergency_e:
                     logger.error(f"{symbol}: 緊急決済も失敗: {emergency_e}")
-                    self.notifier.send_error(f"🚨🚨 {symbol}: 緊急決済失敗！手動確認必須: {emergency_e}")
-                return None
+
+                if emergency_success:
+                    return None
+
+                # 緊急決済失敗 → 逆指値なしでポジション登録（monitor_positionsに管理させる）
+                logger.error(f"{symbol}: 逆指値なし・緊急決済失敗 → ポジション登録して監視継続（要手動確認）")
+                self.notifier.send_error(f"🚨🚨 {symbol}: 逆指値なし・緊急決済失敗！ポジション監視中。手動で損切り注文を入れてください")
+                position_info = {
+                    'entry_order_id': entry_order_id,
+                    'stop_order_id': None,
+                    'target_order_id': None,
+                    'entry_price': current_price,
+                    'qty': qty,
+                    'stop_price': stop_price,
+                    'target_price': int(current_price * 1.02),
+                    'entry_time': datetime.now(),
+                    'material_strength': '',
+                    'material_type': '',
+                    'volume_surge': 0.0,
+                    'entry_pattern': 'A',
+                    'mfe_pct': 0.0,
+                    'mae_pct': 0.0,
+                    'entry_vwap_ratio': None,
+                    'entry_gap_pct': None,
+                    'opening_gap_pct': None,
+                }
+                self.active_positions[symbol] = position_info
+                return position_info
 
             stop_order_id = stop_result['order_id']
 
@@ -423,6 +453,12 @@ class TradeExecutor:
         logger.info("=" * 60)
         logger.info("日次自動売買開始（1日1銘柄集中）")
         logger.info("=" * 60)
+
+        # 9:05以降はパターンAスキップ（寄り付き後は成行注文で意図しない価格で約定するリスク）
+        now = datetime.now()
+        if now.hour > 9 or (now.hour == 9 and now.minute >= 5):
+            logger.warning(f"パターンA: 9:05以降のため本日のエントリーをスキップ（現在時刻: {now.strftime('%H:%M')}）")
+            return
 
         # 日次損益リセット（日付が変わった場合）
         today = datetime.now().date()
@@ -1241,10 +1277,10 @@ class TradeExecutor:
 
             entry_order_id = entry_result['order_id']
 
-            # 損切り -1%
+            # 損切り -1% ※逆指値はSOR非対応のためExchange=1（東証）
             stop_price = int(current_price * 0.99)
             stop_result = self.kabu_client.send_order(
-                symbol=symbol, exchange=9, side=1, qty=qty,
+                symbol=symbol, exchange=1, side=1, qty=qty,
                 order_type=3, price=0, stop_price=stop_price
             )
 
