@@ -945,8 +945,12 @@ class TradeExecutor:
 
             for pos in positions:
                 symbol = pos['symbol']
-                profit_loss = pos['profit_loss']
-                profit_loss_rate = pos['profit_loss_rate']
+                qty = pos.get('qty', 0) or 0
+                # 0株のポジション（決済済み残骸）はスキップ
+                if qty <= 0:
+                    continue
+                profit_loss = pos.get('profit_loss') or 0
+                profit_loss_rate = pos.get('profit_loss_rate') or 0
                 logger.info(f"{symbol}: 損益={profit_loss:,.0f}円 ({profit_loss_rate:+.2f}%)")
 
                 # MFE/MAE更新（active_positionsに存在する場合）
