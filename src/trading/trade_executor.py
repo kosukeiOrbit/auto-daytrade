@@ -44,8 +44,7 @@ class TradeExecutor:
         # 財務データ（発行済株式数）をロード（時価総額フィルター用）
         self.issued_shares_dict = {}  # {code_4digit: issued_shares}
         try:
-            from src.utils.jquants_client import JQuantsClient
-            jquants = JQuantsClient()
+            jquants = self.jquants_client
             statements = jquants.get_statements()
             if statements is not None and len(statements) > 0:
                 for _, row in statements.iterrows():
