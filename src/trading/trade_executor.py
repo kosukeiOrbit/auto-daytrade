@@ -41,6 +41,24 @@ class TradeExecutor:
         self.pattern_b_price_history = {}  # {symbol: [{'time': datetime, 'price': float, 'volume': int, 'vwap': float}]}
         self.pattern_b_last_volume = {}    # {symbol: 前回の累積出来高}（差分計算用）
 
+        # 財務データ（発行済株式数）をロード（時価総額フィルター用）
+        self.issued_shares_dict = {}  # {code_4digit: issued_shares}
+        try:
+            from src.utils.jquants_client import JQuantsClient
+            jquants = JQuantsClient()
+            statements = jquants.get_statements()
+            if statements is not None and len(statements) > 0:
+                for _, row in statements.iterrows():
+                    code = str(row.get('Code', ''))
+                    if len(code) == 5:
+                        code = code[:-1]
+                    shares = row.get('ShOutFY')
+                    if shares and pd.notna(shares):
+                        self.issued_shares_dict[code] = float(shares)
+                logger.info(f"財務データロード完了: {len(self.issued_shares_dict)}銘柄の発行済株式数を取得")
+        except Exception as e:
+            logger.warning(f"財務データロード失敗（時価総額フィルターをスキップ）: {e}")
+
         logger.info(f"TradeExecutor初期化: 予算={budget:,}円, 最大損失率={max_daily_loss_rate*100}%, 最大連敗={max_consecutive_losses}回")
 
     def load_candidates(self, date=None):
@@ -1098,6 +1116,17 @@ class TradeExecutor:
                     logger.debug(f"パターンB除外（ETF・正式名）: {symbol} {full_name}")
                     time.sleep(0.3)
                     continue
+
+                # 時価総額フィルター（50億円以上）
+                current_price_board = board.get('current_price') or 0
+                if self.issued_shares_dict and current_price_board > 0:
+                    issued_shares = self.issued_shares_dict.get(symbol)
+                    if issued_shares:
+                        market_cap = current_price_board * issued_shares
+                        if market_cap < 5_000_000_000:
+                            logger.debug(f"パターンB除外（時価総額不足）: {symbol} {market_cap/100_000_000:.0f}億円")
+                            time.sleep(0.3)
+                            continue
 
                 # 寄りからの上昇率フィルター（+3%超えは除外・高値掴み防止）
                 current_price_board = board.get('current_price') or 0
