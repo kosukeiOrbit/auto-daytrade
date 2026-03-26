@@ -642,8 +642,10 @@ class TradeExecutor:
 
             for pos in positions:
                 symbol = pos['symbol']
-                profit_loss = pos['profit_loss']
-                qty = pos['qty']
+                qty = pos.get('qty') or 0
+                if qty <= 0:
+                    continue  # 0株（決済済み残骸）はスキップ
+                profit_loss = pos.get('profit_loss') or 0
 
                 # 含み損の場合のみ決済
                 if profit_loss < 0:
@@ -704,8 +706,10 @@ class TradeExecutor:
 
             for pos in positions:
                 symbol = pos['symbol']
-                profit_loss = pos['profit_loss']
-                qty = pos['qty']
+                qty = pos.get('qty') or 0
+                if qty <= 0:
+                    continue  # 0株（決済済み残骸）はスキップ
+                profit_loss = pos.get('profit_loss') or 0
 
                 logger.info(f"{symbol}: 損益={profit_loss:,.0f}円 → 大引け前強制決済")
 
