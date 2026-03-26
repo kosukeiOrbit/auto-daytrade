@@ -53,12 +53,12 @@ def main():
     client = KabuClient()  # 本番ポート18080
 
     r6  = fetch_ranking(client, ranking_type=6,  label="売買高急増（現行）")
-    r14 = fetch_ranking(client, ranking_type=14, label="売買代金急増（比較）")
+    r7 = fetch_ranking(client, ranking_type=7, label="売買代金急増（比較）")
 
     # 両方に入っている銘柄
     s6  = {item['symbol'] for item in r6}
-    s14 = {item['symbol'] for item in r14}
-    both = s6 & s14
+    s7  = {item['symbol'] for item in r7}
+    both = s6 & s7
 
     print(f"\n{'='*60}")
     print(f"【共通銘柄】両方のランキングに入っている銘柄: {len(both)}件")
