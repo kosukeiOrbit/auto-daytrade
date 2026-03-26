@@ -179,7 +179,7 @@ def trading_loop(executor, notifier=None):
             logger.debug(f"ポジション監視エラー: {e}")
 
         # 1分待機
-        time.sleep(60)
+        time.sleep(30)  # 30秒間隔（利確監視のため短縮）
 
 
 def main():

@@ -397,21 +397,8 @@ class TradeExecutor:
 
             stop_order_id = stop_result['order_id']
 
-            # 指値（利確）注文
-            logger.info(f"{symbol}: 指値注文 {qty}株 @ {target_price}円で売")
-            target_result = self.kabu_client.send_order(
-                symbol=symbol,
-                exchange=exchange,
-                side=1,  # 1=売
-                qty=qty,
-                order_type=2,  # 2=指値
-                price=target_price
-            )
-
-            target_order_id = target_result['order_id'] if target_result['result_code'] == 0 else None
-            if target_order_id is None:
-                logger.warning(f"{symbol}: 利確指値注文失敗（逆指値は有効なため続行）")
-                self.notifier.send_error(f"⚠️ {symbol}: 利確指値注文失敗。逆指値は有効。手動で利確指値を設定してください")
+            # 利確はmonitor_positions()で監視型決済（W指値API非対応のため）
+            target_order_id = None
 
             # エントリー時のVWAP・始値を取得（分析用）
             entry_vwap = symbol_info.get('vwap')
@@ -980,6 +967,41 @@ class TradeExecutor:
                         pos_info['mfe_pct'] = max(pos_info.get('mfe_pct', 0), current_pct)
                         pos_info['mae_pct'] = min(pos_info.get('mae_pct', 0), current_pct)
 
+            # 利確判定（+2%到達で逆指値キャンセル→成行売り）
+            for symbol, pos_info in list(self.active_positions.items()):
+                if symbol not in current_symbols:
+                    continue  # 既に決済済み
+                target_price = pos_info.get('target_price')
+                if not target_price:
+                    continue
+                # 現在値取得（positionsのデータを使用）
+                pos_data = next((p for p in positions if p['symbol'] == symbol), None)
+                if not pos_data:
+                    continue
+                cp = pos_data.get('current_price') or 0
+                if cp <= 0:
+                    continue
+                if cp >= target_price:
+                    logger.info(f"{symbol}: 利確条件到達（現在値{cp} >= 目標{target_price}）→ 逆指値キャンセル→成行売り")
+                    # 逆指値キャンセル
+                    stop_order_id = pos_info.get('stop_order_id')
+                    if stop_order_id:
+                        try:
+                            self.kabu_client.cancel_order(stop_order_id)
+                        except Exception as e:
+                            logger.warning(f"{symbol}: 逆指値キャンセル失敗: {e}")
+                    # 成行売り
+                    qty = pos_info.get('qty')
+                    try:
+                        self.kabu_client.send_order(
+                            symbol=symbol, exchange=9, side=1, qty=qty,
+                            order_type=1, price=0
+                        )
+                        self.notifier.send_message(f"✅ {symbol}: 利確決済 現在値{cp}円（目標{target_price}円）")
+                    except Exception as e:
+                        logger.error(f"{symbol}: 利確成行売り失敗: {e}")
+                        self.notifier.send_error(f"🚨 {symbol}: 利確決済失敗！手動確認必須: {e}")
+
             # 決済済みポジション検知（active_positionsにあるがAPIのポジションにない）
             closed_symbols = []
             for symbol, pos_info in list(self.active_positions.items()):
@@ -1346,16 +1368,9 @@ class TradeExecutor:
 
             stop_order_id = stop_result['order_id']
 
-            # 利確 +2%
+            # 利確はmonitor_positions()で監視型決済（W指値API非対応のため）
             target_price = int(current_price * 1.02)
-            target_result = self.kabu_client.send_order(
-                symbol=symbol, exchange=9, side=1, qty=qty,
-                order_type=2, price=target_price
-            )
-            target_order_id = target_result['order_id'] if target_result['result_code'] == 0 else None
-            if target_order_id is None:
-                logger.warning(f"パターンB {symbol}: 利確指値失敗（逆指値は有効なため続行）")
-                self.notifier.send_error(f"⚠️ パターンB {symbol}: 利確指値失敗。逆指値は有効")
+            target_order_id = None
 
             # エントリー時のVWAP・始値を取得（分析用）
             entry_vwap = board.get('vwap')
