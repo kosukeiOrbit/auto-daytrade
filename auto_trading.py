@@ -104,6 +104,17 @@ def check_candidates_exist():
     return exists, csv_path
 
 
+def position_monitor_loop(executor, end_time):
+    """ポジション監視スレッド（30秒間隔）"""
+    while datetime.now() < end_time:
+        try:
+            if len(executor.active_positions) > 0:
+                executor.monitor_positions()
+        except Exception as e:
+            logger.debug(f"ポジション監視エラー: {e}")
+        time.sleep(30)
+
+
 def trading_loop(executor, notifier=None):
     """
     取引時間中の監視ループ
@@ -123,6 +134,16 @@ def trading_loop(executor, notifier=None):
     eod_exit_done = False
 
     end_time = datetime.now().replace(hour=15, minute=30, second=0, microsecond=0)
+
+    # ポジション監視スレッド起動（30秒間隔で利確・損切り検知）
+    import threading
+    monitor_thread = threading.Thread(
+        target=position_monitor_loop,
+        args=(executor, end_time),
+        daemon=True
+    )
+    monitor_thread.start()
+    logger.info("ポジション監視スレッド起動（30秒間隔）")
 
     while True:
         now = datetime.now()
@@ -172,14 +193,8 @@ def trading_loop(executor, notifier=None):
                 except Exception as e:
                     logger.error(f"パターンBエラー: {e}")
 
-        # ポジション監視（逆指値/指値の自動約定を検知→トレード履歴保存）
-        try:
-            executor.monitor_positions()
-        except Exception as e:
-            logger.debug(f"ポジション監視エラー: {e}")
-
         # 1分待機
-        time.sleep(30)  # 30秒間隔（利確監視のため短縮）
+        time.sleep(60)
 
 
 def main():
