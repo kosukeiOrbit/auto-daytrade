@@ -343,7 +343,7 @@ class TradeExecutor:
             logger.info(f"{symbol}: 逆指値注文 {qty}株 @ {stop_price}円以下で成行売")
             stop_result = self.kabu_client.send_order(
                 symbol=symbol,
-                exchange=1,  # 逆指値はSOR非対応のため東証
+                exchange=9,  # 買いと同じSOR（市場不一致でCode:8エラー防止）
                 side=1,  # 1=売
                 qty=qty,
                 order_type=3,  # 3=逆指値
@@ -1324,10 +1324,10 @@ class TradeExecutor:
 
             entry_order_id = entry_result['order_id']
 
-            # 損切り -1% ※逆指値はSOR非対応のためExchange=1（東証）
+            # 損切り -1% ※買いと同じSOR（市場不一致でCode:8エラー防止）
             stop_price = int(current_price * 0.99)
             stop_result = self.kabu_client.send_order(
-                symbol=symbol, exchange=1, side=1, qty=qty,
+                symbol=symbol, exchange=9, side=1, qty=qty,
                 order_type=3, price=0, stop_price=stop_price
             )
 
