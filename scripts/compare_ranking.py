@@ -52,23 +52,40 @@ def fetch_ranking(client, ranking_type, label, limit=30):
 def main():
     client = KabuClient()  # 本番ポート18080
 
-    r6  = fetch_ranking(client, ranking_type=6,  label="売買高急増（現行）")
-    r7 = fetch_ranking(client, ranking_type=7, label="売買代金急増（比較）")
+    r6  = fetch_ranking(client, ranking_type=6, label="売買高急増（現行）")
+    r5  = fetch_ranking(client, ranking_type=5, label="TICK回数（比較）")
 
-    # 両方に入っている銘柄
+    # type=6 のみ
     s6  = {item['symbol'] for item in r6}
-    s7  = {item['symbol'] for item in r7}
-    both = s6 & s7
+    s5  = {item['symbol'] for item in r5}
+
+    only_6  = s6 - s5
+    only_5  = s5 - s6
+    both    = s6 & s5
 
     print(f"\n{'='*60}")
-    print(f"【共通銘柄】両方のランキングに入っている銘柄: {len(both)}件")
+    print(f"【type=6のみ】売買高急増にあってTICK回数にない: {len(only_6)}件")
+    print(f"{'='*60}")
+    for item in r6:
+        if item['symbol'] in only_6:
+            etf = is_etf(item['symbol'], item.get('symbol_name', ''))
+            print(f"  {item['symbol']} {item.get('symbol_name','')[:24]} {'★ETF' if etf else ''}")
+
+    print(f"\n{'='*60}")
+    print(f"【type=5のみ】TICK回数にあって売買高急増にない: {len(only_5)}件")
+    print(f"{'='*60}")
+    for item in r5:
+        if item['symbol'] in only_5:
+            etf = is_etf(item['symbol'], item.get('symbol_name', ''))
+            print(f"  {item['symbol']} {item.get('symbol_name','')[:24]} {'★ETF' if etf else ''}")
+
+    print(f"\n{'='*60}")
+    print(f"【共通銘柄】両方にランクイン: {len(both)}件")
     print(f"{'='*60}")
     for item in r6:
         if item['symbol'] in both:
-            name = item.get('symbol_name', '')[:24]
             etf = is_etf(item['symbol'], item.get('symbol_name', ''))
-            marker = '★ETF' if etf else ''
-            print(f"  {item['symbol']} {name} {marker}")
+            print(f"  {item['symbol']} {item.get('symbol_name','')[:24]} {'★ETF' if etf else ''}")
 
 if __name__ == '__main__':
     main()
