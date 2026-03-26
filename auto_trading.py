@@ -234,10 +234,9 @@ def main():
                 break
 
     if not exists:
-        warning_msg = f"候補銘柄CSVが見つかりません。エントリーなしで終了します。\nファイル: {csv_path}"
+        warning_msg = f"候補銘柄CSVが見つかりません。パターンAスキップ、パターンBのみ実行します。\nファイル: {csv_path}"
         logger.warning(warning_msg)
-        notifier.send_message(f"⚠️ 自動売買スキップ\n{warning_msg}")
-        sys.exit(0)
+        notifier.send_message(f"⚠️ {warning_msg}")
 
     # STEP 3: 買付余力取得と予算計算
     logger.info("=" * 60)
@@ -286,18 +285,21 @@ def main():
         notifier.send_error(error_msg)
         sys.exit(1)
 
-    # STEP 5: エントリー実行
-    logger.info("=" * 60)
-    logger.info("エントリー実行")
-    logger.info("=" * 60)
+    # STEP 5: エントリー実行（CSVが存在する場合のみ）
+    if exists:
+        logger.info("=" * 60)
+        logger.info("エントリー実行")
+        logger.info("=" * 60)
 
-    try:
-        executor.execute_daily_trading()
-        logger.success("エントリー実行完了")
-    except Exception as e:
-        error_msg = f"エントリー実行エラー: {e}"
-        logger.error(error_msg)
-        notifier.send_error(f"⚠️ {error_msg}\nポジションが残っている可能性があります。取引監視ループは継続します。")
+        try:
+            executor.execute_daily_trading()
+            logger.success("エントリー実行完了")
+        except Exception as e:
+            error_msg = f"エントリー実行エラー: {e}"
+            logger.error(error_msg)
+            notifier.send_error(f"⚠️ {error_msg}\nポジションが残っている可能性があります。取引監視ループは継続します。")
+    else:
+        logger.info("候補CSVなし → パターンAエントリーをスキップ")
 
     # STEP 6: 取引監視ループ（11:30含み損決済、15:20全決済）
     # エントリーが失敗しても、既存ポジションの決済のために必ず実行する
