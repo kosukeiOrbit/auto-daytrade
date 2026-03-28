@@ -261,7 +261,7 @@ class KabuClient:
                 order_data["ReverseLimitOrder"] = {
                     "TriggerSec": 1,
                     "TriggerPrice": stop_price,
-                    "UnderOver": 2 if side == 1 else 1,  # 売=2(以下), 買=1(以上)
+                    "UnderOver": 1 if side == 1 else 2,  # 売=1(以下), 買=2(以上)
                     "AfterHitOrderType": 1,  # 1=成行
                     "AfterHitPrice": 0
                 }
