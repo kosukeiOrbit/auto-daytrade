@@ -285,27 +285,29 @@ class TradeExecutor:
         logger.info(f"ポジションサイズ: {qty}株 (現在値={current_price}円, 予算={usable_budget:,}円)")
         return qty
 
-    def entry_with_stop_and_target(self, symbol, exchange=9):
+    def entry_with_stop_and_target(self, symbol, exchange=9, entry_pattern='B'):
         """
         エントリー + 逆指値・利確注文セット
 
         Args:
             symbol: 銘柄コード
             exchange: 市場コード（デフォルト9=SOR）
+            entry_pattern: 'A'=寄り前成行, 'B'=場中指値+1%
 
         Returns:
-            dict: {
-                'entry_order_id': str,
-                'stop_order_id': str,
-                'target_order_id': str,
-                'entry_price': float,
-                'qty': int
-            } or None
+            dict: position_info or None
         """
         try:
-            # 銘柄情報取得（板情報はExchange=1で取得、発注はexchange引数を使用）
+            # 銘柄情報取得（板情報はExchange=1で取得）
             symbol_info = self.kabu_client.get_symbol(symbol, exchange=1)
-            current_price = symbol_info['ask_price']  # 売気配値でエントリー
+            current_price = symbol_info['ask_price'] or symbol_info['current_price']
+
+            # 寄り前はask_priceがNullの場合、前日終値（current_price）を使用
+            if current_price is None or current_price <= 0:
+                current_price = symbol_info.get('current_price') or 0
+            if current_price is None or current_price <= 0:
+                logger.warning(f"{symbol}: 現在値取得失敗")
+                return None
 
             # ポジションサイズ計算
             qty = self.calculate_position_size(current_price)
@@ -313,19 +315,30 @@ class TradeExecutor:
                 logger.warning(f"{symbol}: ポジションサイズが0のためスキップ")
                 return None
 
-            # エントリー（指値買い・SOR・現在値+1%）
-            # 成行だとSORの余力拘束が値幅上限で計算され可能額不足になるため指値を使用
-            # +1%の指値は即約定を狙いつつ余力拘束を抑える
-            limit_price = int(current_price * 1.01) if current_price else 0
-            logger.info(f"{symbol}: エントリー注文 {qty}株 @ 指値{limit_price}円（現在値{current_price}+1%・SOR）")
-            entry_result = self.kabu_client.send_order(
-                symbol=symbol,
-                exchange=exchange,
-                side=2,  # 2=買
-                qty=qty,
-                order_type=2,  # 2=指値
-                price=limit_price
-            )
+            # エントリー注文（パターンA/Bで分岐）
+            if entry_pattern == 'A':
+                # パターンA: 成行注文（寄り前に出して寄り付きで約定）
+                logger.info(f"{symbol}: エントリー注文 {qty}株 @ 成行（SOR・パターンA）")
+                entry_result = self.kabu_client.send_order(
+                    symbol=symbol,
+                    exchange=exchange,
+                    side=2,
+                    qty=qty,
+                    order_type=1,  # 成行
+                    price=0
+                )
+            else:
+                # パターンB: 指値+1%（SOR余力拘束対策）
+                limit_price = int(current_price * 1.01)
+                logger.info(f"{symbol}: エントリー注文 {qty}株 @ 指値{limit_price}円（現在値{current_price}+1%・パターンB）")
+                entry_result = self.kabu_client.send_order(
+                    symbol=symbol,
+                    exchange=exchange,
+                    side=2,
+                    qty=qty,
+                    order_type=2,  # 指値
+                    price=limit_price
+                )
 
             if entry_result['result_code'] != 0:
                 logger.error(f"{symbol}: エントリー注文失敗")
@@ -334,28 +347,42 @@ class TradeExecutor:
             entry_order_id = entry_result['order_id']
             logger.success(f"{symbol}: エントリー注文成功 注文番号={entry_order_id}")
 
-            # 約定確認（30秒待機）
-            time.sleep(30)
-            positions = self.kabu_client.get_positions()
-            is_filled = any(
-                p['symbol'] == symbol and (p.get('qty') or 0) > 0
-                for p in positions
-            )
-            if not is_filled:
-                # 未約定 → キャンセル
-                logger.warning(f"{symbol}: 30秒経過・未約定 → 注文キャンセル")
+            # 約定確認（パターンA: 寄り付き待機+最大1分, パターンB: 最大30秒）
+            if entry_pattern == 'A':
+                now = datetime.now()
+                market_open = now.replace(hour=9, minute=0, second=30, microsecond=0)
+                if now < market_open:
+                    wait_seconds = (market_open - now).seconds
+                    logger.info(f"{symbol}: 寄り付き待機 {wait_seconds}秒")
+                    time.sleep(wait_seconds)
+                max_tries = 12  # 5秒×12回=最大1分
+            else:
+                max_tries = 6   # 5秒×6回=最大30秒
+
+            actual_entry_price = None
+            for _ in range(max_tries):
+                time.sleep(5)
+                positions = self.kabu_client.get_positions()
+                filled_pos = next(
+                    (p for p in positions if p['symbol'] == symbol and (p.get('qty') or 0) > 0),
+                    None
+                )
+                if filled_pos:
+                    actual_entry_price = filled_pos.get('price')
+                    logger.success(f"{symbol}: 約定確認OK（約定価格={actual_entry_price}円）")
+                    break
+
+            if actual_entry_price is None:
+                logger.warning(f"{symbol}: 約定タイムアウト → 注文キャンセル")
                 try:
                     self.kabu_client.cancel_order(entry_order_id)
                 except Exception as cancel_e:
-                    logger.error(f"{symbol}: エントリー注文キャンセル失敗: {cancel_e}")
+                    logger.error(f"{symbol}: キャンセル失敗: {cancel_e}")
                 return None
-            logger.success(f"{symbol}: 約定確認OK")
 
-            # 損切り価格（-1%）デイトレルール
-            stop_price = int(current_price * 0.99)
-
-            # 利確価格（+2%）デイトレルール（R倍数2.0）
-            target_price = int(current_price * 1.02)
+            # 損切り・利確を実際の約定価格基準で計算
+            stop_price = int(actual_entry_price * 0.99)
+            target_price = int(actual_entry_price * 1.02)
 
             # 逆指値（損切り）注文 ※SOR非対応のためExchange=1（東証）で発注
             logger.info(f"{symbol}: 逆指値注文 {qty}株 @ {stop_price}円以下で成行売")
@@ -395,15 +422,15 @@ class TradeExecutor:
                     'entry_order_id': entry_order_id,
                     'stop_order_id': None,
                     'target_order_id': None,
-                    'entry_price': current_price,
+                    'entry_price': actual_entry_price,
                     'qty': qty,
                     'stop_price': stop_price,
-                    'target_price': int(current_price * 1.02),
+                    'target_price': target_price,
                     'entry_time': datetime.now(),
                     'material_strength': '',
                     'material_type': '',
                     'volume_surge': 0.0,
-                    'entry_pattern': 'A',
+                    'entry_pattern': entry_pattern,
                     'mfe_pct': 0.0,
                     'mae_pct': 0.0,
                     'entry_vwap_ratio': None,
@@ -421,15 +448,15 @@ class TradeExecutor:
             # エントリー時のVWAP・始値を取得（分析用）
             entry_vwap = symbol_info.get('vwap')
             entry_opening = symbol_info.get('opening_price')
-            entry_vwap_ratio = ((current_price / entry_vwap) - 1) * 100 if entry_vwap and entry_vwap > 0 else None
-            entry_gap_pct = ((current_price / entry_opening) - 1) * 100 if entry_opening and entry_opening > 0 else None
+            entry_vwap_ratio = ((actual_entry_price / entry_vwap) - 1) * 100 if entry_vwap and entry_vwap > 0 else None
+            entry_gap_pct = ((actual_entry_price / entry_opening) - 1) * 100 if entry_opening and entry_opening > 0 else None
 
             # ポジション情報を保存
             position_info = {
                 'entry_order_id': entry_order_id,
                 'stop_order_id': stop_order_id,
                 'target_order_id': target_order_id,
-                'entry_price': current_price,
+                'entry_price': actual_entry_price,
                 'qty': qty,
                 'stop_price': stop_price,
                 'target_price': target_price,
@@ -437,7 +464,7 @@ class TradeExecutor:
                 'material_strength': '',
                 'material_type': '',
                 'volume_surge': 0.0,
-                'entry_pattern': 'A',
+                'entry_pattern': entry_pattern,
                 'mfe_pct': 0.0,
                 'mae_pct': 0.0,
                 'entry_vwap_ratio': round(entry_vwap_ratio, 4) if entry_vwap_ratio is not None else None,
@@ -547,7 +574,7 @@ class TradeExecutor:
                 continue
 
             # エントリー実行
-            position = self.entry_with_stop_and_target(symbol)
+            position = self.entry_with_stop_and_target(symbol, entry_pattern='A')
 
             if position:
                 # candidate情報をposition_infoに付与
