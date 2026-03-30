@@ -227,8 +227,8 @@ def main():
 
     if not exists:
         for retry in range(1, 4):
-            logger.info(f"CSV未検出。リトライ {retry}/3（30秒待機）...")
-            time.sleep(30)
+            logger.info(f"CSV未検出。リトライ {retry}/3（5秒待機）...")
+            time.sleep(5)
             exists, csv_path = check_candidates_exist()
             if exists:
                 break
