@@ -951,12 +951,23 @@ class TradeExecutor:
 
             logger.info(f"保有ポジション: {len(positions)}件")
 
+            # 実際に保有中の銘柄を集める（0株残骸を除外）
+            active_symbols = set()
             for pos in positions:
                 symbol = pos['symbol']
                 qty = pos.get('qty', 0) or 0
-                # 0株のポジション（決済済み残骸）はスキップ
                 if qty <= 0:
+                    # 0株（決済済み残骸）→ active_positionsから削除
+                    if symbol in self.active_positions:
+                        pos_info = self.active_positions[symbol]
+                        entry_price = pos_info.get('entry_price', 0)
+                        exit_price = pos.get('current_price') or pos.get('price') or entry_price
+                        exit_qty = pos_info.get('qty', 0)
+                        logger.info(f"{symbol}: 逆指値約定検知（0株）→ トレード履歴保存・active_positions削除")
+                        self.save_trade_history(symbol, entry_price, exit_price, exit_qty, '損切り')
+                        del self.active_positions[symbol]
                     continue
+                active_symbols.add(symbol)
                 profit_loss = pos.get('profit_loss') or 0
                 profit_loss_rate = pos.get('profit_loss_rate') or 0
                 logger.info(f"{symbol}: 損益={profit_loss:,.0f}円 ({profit_loss_rate:+.2f}%)")
