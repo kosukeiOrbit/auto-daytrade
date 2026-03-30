@@ -316,30 +316,25 @@ class TradeExecutor:
                 logger.warning(f"{symbol}: ポジションサイズが0のためスキップ")
                 return None
 
-            # エントリー注文（パターンA/Bで分岐）
+            # エントリー注文（パターンA/Bで分岐、どちらも指値）
             if entry_pattern == 'A':
-                # パターンA: 成行注文（寄り前に出して寄り付きで約定）
-                logger.info(f"{symbol}: エントリー注文 {qty}株 @ 成行（SOR・パターンA）")
-                entry_result = self.kabu_client.send_order(
-                    symbol=symbol,
-                    exchange=exchange,
-                    side=2,
-                    qty=qty,
-                    order_type=1,  # 成行
-                    price=0
-                )
+                # パターンA: 指値+5%（寄り前に出して寄り付きで約定を狙う）
+                # SOR成行は値幅上限で余力拘束されるため指値を使用
+                limit_price = int(current_price * 1.05)
+                logger.info(f"{symbol}: エントリー注文 {qty}株 @ 指値{limit_price}円（前日終値{current_price}+5%・パターンA）")
             else:
-                # パターンB: 指値+1%（SOR余力拘束対策）
+                # パターンB: 指値+1%（場中の即約定狙い）
                 limit_price = int(current_price * 1.01)
                 logger.info(f"{symbol}: エントリー注文 {qty}株 @ 指値{limit_price}円（現在値{current_price}+1%・パターンB）")
-                entry_result = self.kabu_client.send_order(
-                    symbol=symbol,
-                    exchange=exchange,
-                    side=2,
-                    qty=qty,
-                    order_type=2,  # 指値
-                    price=limit_price
-                )
+
+            entry_result = self.kabu_client.send_order(
+                symbol=symbol,
+                exchange=exchange,
+                side=2,
+                qty=qty,
+                order_type=2,  # 指値
+                price=limit_price
+            )
 
             if entry_result['result_code'] != 0:
                 logger.error(f"{symbol}: エントリー注文失敗")
