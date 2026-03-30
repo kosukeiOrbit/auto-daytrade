@@ -40,6 +40,7 @@ class TradeExecutor:
         # パターンB: 銘柄ごとの直近価格履歴（5分足組み立て用）
         self.pattern_b_price_history = {}  # {symbol: [{'time': datetime, 'price': float, 'volume': int, 'vwap': float}]}
         self.pattern_b_last_volume = {}    # {symbol: 前回の累積出来高}（差分計算用）
+        self.entry_blacklist = set()       # エントリー失敗した銘柄（当日中は再挑戦しない）
 
         # 財務データ（発行済株式数）をロード（時価総額フィルター用）
         self.issued_shares_dict = {}  # {code_4digit: issued_shares}
@@ -490,6 +491,9 @@ class TradeExecutor:
 
         except Exception as e:
             logger.error(f"{symbol}: エントリーエラー: {e}")
+            # エントリー失敗銘柄を当日ブラックリストに追加（再挑戦防止）
+            self.entry_blacklist.add(symbol)
+            logger.info(f"{symbol}: ブラックリストに追加（当日中は再エントリーしない）")
             # エラー通知
             self.notifier.send_error(f"エントリーエラー: {symbol} - {str(e)[:100]}")
             return None
@@ -1302,6 +1306,10 @@ class TradeExecutor:
         """
         # ポジション保有中はスキップ（1銘柄制限）
         if len(self.active_positions) > 0:
+            return False
+
+        # エントリー失敗銘柄は当日中スキップ
+        if symbol in self.entry_blacklist:
             return False
 
         # 価格履歴が5本以上必要
