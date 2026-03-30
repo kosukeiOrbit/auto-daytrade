@@ -313,17 +313,18 @@ class TradeExecutor:
                 logger.warning(f"{symbol}: ポジションサイズが0のためスキップ")
                 return None
 
-            # エントリー（成行買い・SOR）
-            # SORでは寄成(13)が使えないため成行(1)で発注
-            # 場が開く前に発注した場合、寄り付きで約定する
-            logger.info(f"{symbol}: エントリー注文 {qty}株 @ 成行（SOR）")
+            # エントリー（指値買い・SOR・現在値+1%）
+            # 成行だとSORの余力拘束が値幅上限で計算され可能額不足になるため指値を使用
+            # +1%の指値は即約定を狙いつつ余力拘束を抑える
+            limit_price = int(current_price * 1.01) if current_price else 0
+            logger.info(f"{symbol}: エントリー注文 {qty}株 @ 指値{limit_price}円（現在値{current_price}+1%・SOR）")
             entry_result = self.kabu_client.send_order(
                 symbol=symbol,
                 exchange=exchange,
                 side=2,  # 2=買
                 qty=qty,
-                order_type=1,  # 1=成行（SORでは寄成不可のため）
-                price=0
+                order_type=2,  # 2=指値
+                price=limit_price
             )
 
             if entry_result['result_code'] != 0:
@@ -332,6 +333,23 @@ class TradeExecutor:
 
             entry_order_id = entry_result['order_id']
             logger.success(f"{symbol}: エントリー注文成功 注文番号={entry_order_id}")
+
+            # 約定確認（30秒待機）
+            time.sleep(30)
+            positions = self.kabu_client.get_positions()
+            is_filled = any(
+                p['symbol'] == symbol and (p.get('qty') or 0) > 0
+                for p in positions
+            )
+            if not is_filled:
+                # 未約定 → キャンセル
+                logger.warning(f"{symbol}: 30秒経過・未約定 → 注文キャンセル")
+                try:
+                    self.kabu_client.cancel_order(entry_order_id)
+                except Exception as cancel_e:
+                    logger.error(f"{symbol}: エントリー注文キャンセル失敗: {cancel_e}")
+                return None
+            logger.success(f"{symbol}: 約定確認OK")
 
             # 損切り価格（-1%）デイトレルール
             stop_price = int(current_price * 0.99)
@@ -1344,15 +1362,17 @@ class TradeExecutor:
                 logger.warning(f"パターンB {symbol}: ポジションサイズが0")
                 return None
 
-            # 成行注文（場中）
-            logger.info(f"パターンB {symbol}: 成行エントリー {qty}株 @ {current_price}円")
+            # 指値注文（場中・現在値+1%）
+            # 成行だとSORの余力拘束が値幅上限で計算され可能額不足になるため
+            limit_price = int(current_price * 1.01)
+            logger.info(f"パターンB {symbol}: 指値エントリー {qty}株 @ {limit_price}円（現在値{current_price}+1%）")
             entry_result = self.kabu_client.send_order(
                 symbol=symbol,
                 exchange=9,
                 side=2,  # 買
                 qty=qty,
-                order_type=1,  # 成行
-                price=0
+                order_type=2,  # 指値
+                price=limit_price
             )
 
             if entry_result['result_code'] != 0:
@@ -1360,6 +1380,22 @@ class TradeExecutor:
                 return None
 
             entry_order_id = entry_result['order_id']
+
+            # 約定確認（30秒待機）
+            time.sleep(30)
+            positions = self.kabu_client.get_positions()
+            is_filled = any(
+                p['symbol'] == symbol and (p.get('qty') or 0) > 0
+                for p in positions
+            )
+            if not is_filled:
+                logger.warning(f"パターンB {symbol}: 30秒経過・未約定 → 注文キャンセル")
+                try:
+                    self.kabu_client.cancel_order(entry_order_id)
+                except Exception as cancel_e:
+                    logger.error(f"パターンB {symbol}: キャンセル失敗: {cancel_e}")
+                return None
+            logger.success(f"パターンB {symbol}: 約定確認OK")
 
             # 損切り -1% ※買いと同じSOR（市場不一致でCode:8エラー防止）
             stop_price = int(current_price * 0.99)
