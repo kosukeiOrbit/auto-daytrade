@@ -1007,8 +1007,13 @@ class TradeExecutor:
                         entry_price = pos_info.get('entry_price', 0)
                         exit_price = pos.get('current_price') or pos.get('price') or entry_price
                         exit_qty = pos_info.get('qty', 0)
-                        logger.info(f"{symbol}: 逆指値約定検知（0株）→ トレード履歴保存・active_positions削除")
+                        pnl = (exit_price - entry_price) * exit_qty if entry_price and exit_price else 0
+                        pnl_pct = (exit_price / entry_price - 1) * 100 if entry_price and exit_price and entry_price > 0 else 0
+                        logger.info(f"{symbol}: 逆指値約定検知（0株）→ 損益{pnl:+,.0f}円（{pnl_pct:+.1f}%）")
                         self.save_trade_history(symbol, entry_price, exit_price, exit_qty, '損切り')
+                        self.notifier.send_message(
+                            f"✂️ {symbol}: 損切り決済 {entry_price}円→{exit_price}円（{pnl:+,.0f}円 / {pnl_pct:+.1f}%）"
+                        )
                         del self.active_positions[symbol]
                     continue
                 active_symbols.add(symbol)
