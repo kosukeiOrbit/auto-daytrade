@@ -1170,19 +1170,19 @@ class TradeExecutor:
 
                 # ETFフィルタ
                 if self._is_etf(symbol, symbol_name):
-                    logger.debug(f"パターンB除外（ETF）: {symbol} {symbol_name}")
+                    logger.info(f"パターンB除外（ETF）: {symbol} {symbol_name}")
                     continue
 
                 # 株価フィルタ（200円以上）
                 current_price = item.get('current_price', 0) or 0
                 if current_price < 200:
-                    logger.debug(f"パターンB除外（低位株）: {symbol} 現在値{current_price}円")
+                    logger.info(f"パターンB除外（低位株）: {symbol} 現在値{current_price}円")
                     continue
 
                 # 予算上限フィルター（1単元100株が予算内か）
                 # SOR成行のため値幅上限バッファとして80%を適用
                 if current_price * 100 > self.budget * 0.8:
-                    logger.debug(f"パターンB除外（予算超過）: {symbol} 現在値{current_price}円 必要額{current_price*100:,.0f}円 予算{self.budget*0.8:,.0f}円")
+                    logger.info(f"パターンB除外（予算超過）: {symbol} 現在値{current_price}円 必要額{current_price*100:,.0f}円 予算{self.budget*0.8:,.0f}円")
                     continue
 
                 # 売買代金フィルタ（3,000万円以上）
@@ -1190,21 +1190,21 @@ class TradeExecutor:
                 trading_volume = item.get('trading_volume', 0) or 0
                 turnover = current_price * trading_volume * 1000
                 if turnover < 30_000_000:
-                    logger.debug(f"パターンB除外（薄商い）: {symbol} 売買代金{turnover/10000:.0f}万円")
+                    logger.info(f"パターンB除外（薄商い）: {symbol} 売買代金{turnover/10000:.0f}万円")
                     continue
 
                 # /board で詳細情報取得
                 try:
                     board = self.kabu_client.get_symbol(symbol)
                 except Exception as e:
-                    logger.debug(f"パターンB {symbol}: board取得失敗: {e}")
+                    logger.info(f"パターンB除外（board取得失敗）: {symbol} {e}")
                     time.sleep(0.3)
                     continue
 
                 # board正式名でETF再チェック（短縮名で漏れたETFを捕捉）
                 full_name = board.get('symbol_name', '') or ''
                 if self._is_etf(symbol, full_name):
-                    logger.debug(f"パターンB除外（ETF・正式名）: {symbol} {full_name}")
+                    logger.info(f"パターンB除外（ETF・正式名）: {symbol} {full_name}")
                     time.sleep(0.3)
                     continue
 
@@ -1215,7 +1215,7 @@ class TradeExecutor:
                     if issued_shares:
                         market_cap = current_price_board * issued_shares
                         if market_cap < 5_000_000_000:
-                            logger.debug(f"パターンB除外（時価総額不足）: {symbol} {market_cap/100_000_000:.0f}億円")
+                            logger.info(f"パターンB除外（時価総額不足）: {symbol} {market_cap/100_000_000:.0f}億円")
                             time.sleep(0.3)
                             continue
 
@@ -1225,7 +1225,7 @@ class TradeExecutor:
                 if opening_price > 0 and current_price_board > 0:
                     change_from_open = (current_price_board - opening_price) / opening_price * 100
                     if change_from_open > 3.0:
-                        logger.debug(f"パターンB除外（高値）: {symbol} 寄りから+{change_from_open:.1f}%")
+                        logger.info(f"パターンB除外（高値）: {symbol} 寄りから+{change_from_open:.1f}%")
                         time.sleep(0.3)
                         continue
 
