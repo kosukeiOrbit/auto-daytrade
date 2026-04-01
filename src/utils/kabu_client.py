@@ -474,6 +474,18 @@ class KabuClient:
             logger.error(f"注文一覧取得エラー: {e}")
             return []
 
+    def unregister_all(self):
+        """登録銘柄を全解除（レジスト数上限50対策）"""
+        try:
+            url = f"{self.api_url}/unregister/all"
+            response = self._api_request(requests.put, url)
+            if response.status_code == 200:
+                logger.debug("登録銘柄全解除成功")
+            else:
+                logger.debug(f"登録銘柄全解除失敗: {response.status_code}")
+        except Exception as e:
+            logger.debug(f"登録銘柄全解除エラー: {e}")
+
     def get_ranking(self, ranking_type=6, exchange_division="ALL", limit=50):
         """
         ランキング情報を取得

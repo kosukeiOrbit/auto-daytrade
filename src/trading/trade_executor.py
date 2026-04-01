@@ -299,6 +299,9 @@ class TradeExecutor:
             dict: position_info or None
         """
         try:
+            # 登録銘柄を全解除（レジスト数上限50対策）
+            self.kabu_client.unregister_all()
+
             # 銘柄情報取得（板情報はExchange=1で取得）
             symbol_info = self.kabu_client.get_symbol(symbol, exchange=1)
             current_price = symbol_info['ask_price'] or symbol_info['current_price']
@@ -1153,6 +1156,9 @@ class TradeExecutor:
             list: 個別株上位10銘柄のシンボルリスト
         """
         try:
+            # 登録銘柄を全解除（board取得で自動登録され上限50に達するため）
+            self.kabu_client.unregister_all()
+
             ranking = self.kabu_client.get_ranking(ranking_type=6, exchange_division="ALL", limit=50)
 
             if not ranking:
