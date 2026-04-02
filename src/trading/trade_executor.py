@@ -1289,14 +1289,56 @@ class TradeExecutor:
 
                 time.sleep(0.3)  # API レート制限対策
 
-            # candidates_*.csvの材料銘柄を先頭に追加（重複除去・最大10件）
-            priority = [s for s in self.pattern_b_candidate_symbols if s not in top_symbols]
-            if priority:
-                combined = priority + top_symbols
-                top_symbols = combined[:10]
-                logger.info(f"パターンB候補に材料銘柄を追加: {priority[:5]}")
+            # candidates_*.csvの材料銘柄のboard取得・price_history蓄積
+            priority_added = []
+            for symbol in self.pattern_b_candidate_symbols:
+                if symbol in top_symbols:
+                    continue  # 既にランキング経由で追加済み
+                if len(top_symbols) + len(priority_added) >= 10:
+                    break  # 最大10件
+                try:
+                    board = self.kabu_client.get_symbol(symbol, exchange=1)
+                    current_price_board = board.get('current_price') or 0
+                    if current_price_board <= 0:
+                        continue
 
-            logger.info(f"パターンBスキャン: ランキング{len(ranking)}件→フィルタ通過{len(top_symbols)}件")
+                    # price_history蓄積
+                    current_cumulative = board.get('trading_volume', 0) or 0
+                    last_cumulative = self.pattern_b_last_volume.get(symbol, 0)
+                    delta_volume = current_cumulative - last_cumulative
+                    if delta_volume < 0:
+                        delta_volume = 0
+                    self.pattern_b_last_volume[symbol] = current_cumulative
+
+                    price_record = {
+                        'time': datetime.now(),
+                        'price': current_price_board,
+                        'volume': delta_volume,
+                        'vwap': board.get('vwap'),
+                        'opening_price': board.get('opening_price'),
+                        'rapid_trade_pct': 0,
+                    }
+                    if symbol not in self.pattern_b_price_history:
+                        self.pattern_b_price_history[symbol] = []
+                    self.pattern_b_price_history[symbol].append(price_record)
+
+                    cutoff = datetime.now() - timedelta(minutes=25)
+                    self.pattern_b_price_history[symbol] = [
+                        r for r in self.pattern_b_price_history[symbol]
+                        if r['time'] >= cutoff
+                    ]
+
+                    priority_added.append(symbol)
+                    logger.info(f"パターンB材料銘柄: {symbol} {board.get('symbol_name', '')} 現在値={current_price_board}円")
+                    time.sleep(0.3)
+                except Exception as e:
+                    logger.debug(f"パターンB材料銘柄 {symbol}: board取得失敗: {e}")
+
+            if priority_added:
+                top_symbols = priority_added + top_symbols
+                top_symbols = top_symbols[:10]
+
+            logger.info(f"パターンBスキャン: ランキング{len(ranking)}件→フィルタ通過{len(top_symbols)}件（材料{len(priority_added)}件追加）")
 
             # ランキングから外れた銘柄の履歴を削除
             for symbol in list(self.pattern_b_price_history.keys()):
