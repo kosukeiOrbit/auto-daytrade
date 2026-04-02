@@ -235,8 +235,10 @@ class KabuClient:
             # 信用デイトレード（API経由で手数料・金利・貸株料無料）
             if side == 2:  # 買い（信用新規）
                 cash_margin = 2   # 信用新規
+                deliv_type = 0    # 指定なし
             else:  # 売り（信用返済）
                 cash_margin = 3   # 信用返済
+                deliv_type = 2    # お預り金（返済時必須）
 
             # 注文リクエストボディ
             order_data = {
@@ -247,7 +249,7 @@ class KabuClient:
                 "Side": str(side),
                 "CashMargin": cash_margin,
                 "MarginTradeType": 3,  # 3=一般信用（デイトレ）・手数料無料
-                "DelivType": 0,   # 指定なし
+                "DelivType": deliv_type,
                 "FundType": "  ",  # 半角スペース2つ
                 "AccountType": 4,  # 4=特定
                 "Qty": qty,
