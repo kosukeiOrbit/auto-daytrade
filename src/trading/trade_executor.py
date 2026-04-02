@@ -1005,15 +1005,23 @@ class TradeExecutor:
                 symbol = pos['symbol']
                 qty = pos.get('qty', 0) or 0
                 if qty <= 0:
-                    # 0株（決済済み残骸）→ active_positionsから削除
+                    # 0株（決済済み残骸）→ 同銘柄にqty>0の建玉がなければ決済検知
                     if symbol in self.active_positions:
+                        # 同銘柄でqty>0の建玉が他にあるか確認
+                        has_live_position = any(
+                            p['symbol'] == symbol and (p.get('qty', 0) or 0) > 0
+                            for p in positions
+                        )
+                        if has_live_position:
+                            # 0株残骸だが生きた建玉がある → スキップ（誤検知防止）
+                            continue
                         pos_info = self.active_positions[symbol]
                         entry_price = pos_info.get('entry_price', 0)
                         exit_price = pos.get('current_price') or pos.get('price') or entry_price
                         exit_qty = pos_info.get('qty', 0)
                         pnl = (exit_price - entry_price) * exit_qty if entry_price and exit_price else 0
                         pnl_pct = (exit_price / entry_price - 1) * 100 if entry_price and exit_price and entry_price > 0 else 0
-                        logger.info(f"{symbol}: 逆指値約定検知（0株）→ 損益{pnl:+,.0f}円（{pnl_pct:+.1f}%）")
+                        logger.info(f"{symbol}: 逆指値約定検知（0株・全建玉決済済み）→ 損益{pnl:+,.0f}円（{pnl_pct:+.1f}%）")
                         self.save_trade_history(symbol, entry_price, exit_price, exit_qty, '損切り')
                         self.notifier.send_message(
                             f"✂️ {symbol}: 損切り決済 {entry_price}円→{exit_price}円（{pnl:+,.0f}円 / {pnl_pct:+.1f}%）"
