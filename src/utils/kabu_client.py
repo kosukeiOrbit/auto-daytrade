@@ -232,13 +232,13 @@ class KabuClient:
                 front_order_type_map = {1: 10, 2: 20, 3: 30}
                 front_order_type = front_order_type_map.get(order_type, 10)
 
-            # side による DelivType / FundType の切り替え
+            # 信用デイトレード（API経由で手数料・金利・貸株料無料）
             if side == 2:  # 買い
-                deliv_type = 2    # お預り金
-                fund_type = "AA"  # 信用代用（現物買い・SOR注文で必須）
+                deliv_type = 3    # 自動振替（信用取引）
+                fund_type = "  "  # 半角スペース2つ（信用取引）
             else:  # 売り（side=1）
-                deliv_type = 0    # 指定なし（現物売り）
-                fund_type = "  "  # 半角スペース2つ（現物売り必須）
+                deliv_type = 0    # 指定なし
+                fund_type = "  "  # 半角スペース2つ
 
             # 注文リクエストボディ
             order_data = {
@@ -247,7 +247,7 @@ class KabuClient:
                 "Exchange": exchange,
                 "SecurityType": 1,  # 1=株式
                 "Side": str(side),
-                "CashMargin": 1,  # 1=現物
+                "CashMargin": 2,  # 2=信用（デイトレード・API経由で手数料無料）
                 "DelivType": deliv_type,
                 "FundType": fund_type,
                 "AccountType": 4,  # 4=特定
@@ -290,23 +290,6 @@ class KabuClient:
 
                 return result
             else:
-                # FundType='AA'で失敗した場合、'02'でフォールバック（買い注文のみ）
-                if side == 2 and fund_type == "AA":
-                    logger.warning(f"FundType='AA'失敗→'02'でリトライ: {response.status_code} {response.text[:80]}")
-                    order_data["FundType"] = "02"
-                    body = json.dumps(order_data)
-                    response2 = self._api_request(requests.post, url, data=body)
-                    if response2.status_code == 200:
-                        order_result = response2.json()
-                        result = {
-                            'order_id': order_result.get('OrderId'),
-                            'result_code': order_result.get('Result'),
-                            'result_msg': order_result.get('ResultMsg', '')
-                        }
-                        if result['result_code'] == 0:
-                            logger.success(f"注文発注成功（FundType='02'）: 注文番号={result['order_id']}")
-                        return result
-
                 error_msg = f"注文発注失敗: {response.status_code} - {response.text}"
                 logger.error(error_msg)
                 raise Exception(error_msg)
