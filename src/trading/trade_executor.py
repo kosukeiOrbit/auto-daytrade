@@ -1064,7 +1064,14 @@ class TradeExecutor:
                             symbol=symbol, exchange=9, side=1, qty=qty,
                             order_type=1, price=0
                         )
-                        self.notifier.send_message(f"✅ {symbol}: 利確決済 現在値{cp}円（目標{target_price}円）")
+                        # 利確成功 → トレード履歴保存 & active_positionsから削除
+                        entry_price = pos_info.get('entry_price', 0)
+                        profit_loss = (cp - entry_price) * qty if entry_price else 0
+                        self.save_trade_history(symbol, entry_price, cp, qty, '利確')
+                        del self.active_positions[symbol]
+                        logger.info(f"{symbol}: 利確決済完了 {entry_price}円→{cp}円（{profit_loss:+,.0f}円）")
+                        self.notifier.send_message(f"✅ {symbol}: 利確決済 {entry_price}円→{cp}円（{profit_loss:+,.0f}円）")
+                        break  # active_positionsを変更したのでループを抜ける
                     except Exception as e:
                         logger.error(f"{symbol}: 利確成行売り失敗: {e}")
                         self.notifier.send_error(f"🚨 {symbol}: 利確決済失敗！手動確認必須: {e}")
