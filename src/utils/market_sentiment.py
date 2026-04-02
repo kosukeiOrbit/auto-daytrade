@@ -19,12 +19,25 @@ class MarketSentiment:
         """
         日経先物の直近変化率を取得
 
+        優先順位:
+        1. kabuステーションAPI（大証先物・リアルタイム）
+        2. yfinance NKD=F（シカゴ先物・前日終値まで）
+        3. yfinance ^N225（日経平均指数）
+
         Returns:
             dict: {'close': float, 'change_pct': float} or None
         """
-        logger.info("日経先物データ取得中 (yfinance)...")
+        # 1. kabuステーションAPI（リアルタイム・最優先）
+        try:
+            data = self._fetch_kabu_nikkei_futures()
+            if data:
+                logger.success(f"日経先物取得成功 (kabuStation): {data['close']:.0f} ({data['change_pct']:+.2f}%)")
+                return data
+        except Exception as e:
+            logger.debug(f"kabuStation日経先物取得失敗: {e}")
 
-        # 複数シンボルを試行（yfinanceの日経先物シンボルは不安定なため）
+        # 2. yfinanceフォールバック
+        logger.info("日経先物データ取得中 (yfinance フォールバック)...")
         symbols = ['NKD=F', '^N225']
         for symbol in symbols:
             try:
@@ -35,8 +48,77 @@ class MarketSentiment:
                 logger.debug(f"{symbol} 取得失敗: {e}")
                 continue
 
-        logger.warning("日経先物データ取得失敗（全シンボル）")
+        logger.warning("日経先物データ取得失敗（全ソース）")
         return None
+
+    def _fetch_kabu_nikkei_futures(self):
+        """
+        kabuステーションAPIから日経平均先物のリアルタイム価格を取得
+
+        Returns:
+            dict: {'close': float, 'change_pct': float} or None
+        """
+        import requests
+
+        try:
+            from src.utils.kabu_client import KabuClient
+            client = KabuClient()
+            token = client.get_token()
+
+            # 日経225先物の銘柄コードを取得（直近限月）
+            headers = {'X-API-KEY': token}
+            now = datetime.now()
+            # 限月は3,6,9,12月。現在月の次の限月を計算
+            month = now.month
+            year = now.year
+            quarter_months = [3, 6, 9, 12]
+            deriv_month = None
+            for qm in quarter_months:
+                if qm >= month:
+                    deriv_month = f"{year}{qm:02d}"
+                    break
+            if deriv_month is None:
+                deriv_month = f"{year + 1}03"
+
+            resp = requests.get(
+                f"{client.api_url}/symbolname/future",
+                headers=headers,
+                params={'FutureCode': 'NK225', 'DerivMonth': deriv_month},
+                timeout=5
+            )
+            if resp.status_code != 200:
+                return None
+
+            symbol = resp.json().get('Symbol')
+            if not symbol:
+                return None
+
+            # board取得（Exchange=2: 大証）
+            resp_board = requests.get(
+                f"{client.api_url}/board/{symbol}@2",
+                headers=headers,
+                timeout=5
+            )
+            if resp_board.status_code != 200:
+                return None
+
+            board = resp_board.json()
+            current_price = board.get('CurrentPrice')
+            prev_close = board.get('PreviousClose')
+
+            if not current_price or not prev_close or prev_close == 0:
+                return None
+
+            change_pct = (current_price - prev_close) / prev_close * 100
+
+            return {
+                'close': current_price,
+                'change_pct': change_pct
+            }
+
+        except Exception as e:
+            logger.debug(f"kabuStation日経先物取得エラー: {e}")
+            return None
 
     def get_us_market_close(self, date=None):
         """
