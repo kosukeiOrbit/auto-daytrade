@@ -256,6 +256,10 @@ class KabuClient:
                 "ExpireDay": 0  # 0=当日中
             }
 
+            # 信用返済の場合は建玉自動選択
+            if cash_margin == 3:
+                order_data["ClosePositionOrder"] = 0  # 0=日付（古い順）で自動選択
+
             # 逆指値の場合
             if order_type == 3:
                 order_data["ReverseLimitOrder"] = {
