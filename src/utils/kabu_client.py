@@ -233,12 +233,10 @@ class KabuClient:
                 front_order_type = front_order_type_map.get(order_type, 10)
 
             # 信用デイトレード（API経由で手数料・金利・貸株料無料）
-            if side == 2:  # 買い
-                deliv_type = 3    # 自動振替（信用取引）
-                fund_type = "  "  # 半角スペース2つ（信用取引）
-            else:  # 売り（side=1）
-                deliv_type = 0    # 指定なし
-                fund_type = "  "  # 半角スペース2つ
+            if side == 2:  # 買い（信用新規）
+                cash_margin = 2   # 信用新規
+            else:  # 売り（信用返済）
+                cash_margin = 3   # 信用返済
 
             # 注文リクエストボディ
             order_data = {
@@ -247,9 +245,10 @@ class KabuClient:
                 "Exchange": exchange,
                 "SecurityType": 1,  # 1=株式
                 "Side": str(side),
-                "CashMargin": 2,  # 2=信用（デイトレード・API経由で手数料無料）
-                "DelivType": deliv_type,
-                "FundType": fund_type,
+                "CashMargin": cash_margin,
+                "MarginTradeType": 3,  # 3=一般信用（デイトレ）・手数料無料
+                "DelivType": 0,   # 指定なし
+                "FundType": "  ",  # 半角スペース2つ
                 "AccountType": 4,  # 4=特定
                 "Qty": qty,
                 "FrontOrderType": front_order_type,  # 10=成行, 20=指値, 30=逆指値
