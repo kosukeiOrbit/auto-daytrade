@@ -1194,8 +1194,8 @@ class TradeExecutor:
 
                 # 予算上限フィルター（1単元100株が予算内か）
                 # SOR成行のため値幅上限バッファとして80%を適用
-                if current_price * 100 > self.budget * 0.8:
-                    logger.info(f"パターンB除外（予算超過）: {symbol} 現在値{current_price}円 必要額{current_price*100:,.0f}円 予算{self.budget*0.8:,.0f}円")
+                if current_price * 100 > self.budget * 0.95:
+                    logger.info(f"パターンB除外（予算超過）: {symbol} 現在値{current_price}円 必要額{current_price*100:,.0f}円 予算{self.budget*0.95:,.0f}円")
                     continue
 
                 # 売買代金フィルタ（3,000万円以上）
