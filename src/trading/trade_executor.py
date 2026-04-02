@@ -41,6 +41,7 @@ class TradeExecutor:
         self.pattern_b_price_history = {}  # {symbol: [{'time': datetime, 'price': float, 'volume': int, 'vwap': float}]}
         self.pattern_b_last_volume = {}    # {symbol: 前回の累積出来高}（差分計算用）
         self.entry_blacklist = set()       # エントリー失敗した銘柄（当日中は再挑戦しない）
+        self.pattern_b_candidate_symbols = []  # candidates_*.csvから読み込んだ優先監視銘柄
 
         # 財務データ（発行済株式数）をロード（時価総額フィルター用）
         self.issued_shares_dict = {}  # {code_4digit: issued_shares}
@@ -1287,6 +1288,13 @@ class TradeExecutor:
                 ]
 
                 time.sleep(0.3)  # API レート制限対策
+
+            # candidates_*.csvの材料銘柄を先頭に追加（重複除去・最大10件）
+            priority = [s for s in self.pattern_b_candidate_symbols if s not in top_symbols]
+            if priority:
+                combined = priority + top_symbols
+                top_symbols = combined[:10]
+                logger.info(f"パターンB候補に材料銘柄を追加: {priority[:5]}")
 
             logger.info(f"パターンBスキャン: ランキング{len(ranking)}件→フィルタ通過{len(top_symbols)}件")
 

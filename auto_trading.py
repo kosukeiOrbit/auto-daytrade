@@ -301,6 +301,20 @@ def main():
     else:
         logger.info("候補CSVなし → パターンAエントリーをスキップ")
 
+    # パターンBの優先監視銘柄をcandidates CSVから読み込み
+    if exists and csv_path:
+        try:
+            import pandas as pd
+            df_cand = pd.read_csv(csv_path, encoding='utf-8-sig')
+            if 'material_strength' in df_cand.columns:
+                df_cand = df_cand[df_cand['material_strength'].isin(['強', '中'])]
+            candidate_symbols = df_cand['Code'].astype(str).str[:4].tolist()
+            executor.pattern_b_candidate_symbols = candidate_symbols
+            if candidate_symbols:
+                logger.info(f"パターンB候補（材料銘柄）: {len(candidate_symbols)}銘柄 {candidate_symbols[:10]}")
+        except Exception as e:
+            logger.warning(f"パターンB候補読み込み失敗: {e}")
+
     # STEP 6: 取引監視ループ（11:30含み損決済、15:20全決済）
     # エントリーが失敗しても、既存ポジションの決済のために必ず実行する
     try:
