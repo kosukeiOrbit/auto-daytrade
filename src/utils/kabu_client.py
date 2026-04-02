@@ -176,6 +176,7 @@ class KabuClient:
                     'trading_volume': board_data.get('TradingVolume'),
                     'vwap': board_data.get('VWAP'),
                     'opening_price': board_data.get('OpeningPrice'),
+                    'ask_qty': board_data.get('AskQty'),
                     'upper_limit': board_data.get('UpperLimit'),
                     'lower_limit': board_data.get('LowerLimit'),
                     'market_cap_value': board_data.get('MarketCapValue')

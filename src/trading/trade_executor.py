@@ -1243,6 +1243,15 @@ class TradeExecutor:
                         time.sleep(0.3)
                         continue
 
+                # 板の厚さフィルター（AskQtyがエントリー予定株数の2倍未満は除外）
+                ask_qty = board.get('ask_qty', 0) or 0
+                if ask_qty > 0 and current_price_board > 0:
+                    estimated_qty = max(100, int(self.budget / current_price_board / 100) * 100)
+                    if ask_qty < estimated_qty * 2:
+                        logger.info(f"パターンB除外（板薄）: {symbol} AskQty={ask_qty:.0f}株 < 必要{estimated_qty * 2}株")
+                        time.sleep(0.3)
+                        continue
+
                 # 全フィルタ通過 → 採用
                 top_symbols.append(symbol)
                 logger.info(
