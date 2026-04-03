@@ -381,69 +381,15 @@ class TradeExecutor:
                 return None
 
             # 損切り・利確を実際の約定価格基準で計算
+            # 逆指値はAPI非対応（SOR+信用で「即座に発動」エラー多発）のため
+            # 損切り・利確ともmonitor_positions()の監視型で実行
             stop_price = int(actual_entry_price * 0.99)
             target_price = int(actual_entry_price * 1.02)
 
-            # 逆指値（損切り）注文 ※SOR非対応のためExchange=1（東証）で発注
-            logger.info(f"{symbol}: 逆指値注文 {qty}株 @ {stop_price}円以下で成行売")
-            stop_result = self.kabu_client.send_order(
-                symbol=symbol,
-                exchange=9,  # 買いと同じSOR（市場不一致でCode:8エラー防止）
-                side=1,  # 1=売
-                qty=qty,
-                order_type=3,  # 3=逆指値
-                price=0,  # 成行
-                stop_price=stop_price
-            )
+            stop_order_id = None  # 監視型損切り（逆指値API不使用）
+            target_order_id = None  # 監視型利確
 
-            if stop_result['result_code'] != 0:
-                # 逆指値失敗 → 即座に成行で反対売買して緊急決済
-                logger.error(f"{symbol}: 逆指値注文失敗！緊急決済を実行")
-                self.notifier.send_error(f"🚨 {symbol}: 逆指値注文失敗！損切なしポジション回避のため緊急決済")
-                emergency_success = False
-                try:
-                    emergency_result = self.kabu_client.send_order(
-                        symbol=symbol, exchange=exchange, side=1, qty=qty,
-                        order_type=1, price=0  # 成行売り
-                    )
-                    if emergency_result.get('result_code') == 0:
-                        emergency_success = True
-                        logger.info(f"{symbol}: 緊急決済成功")
-                except Exception as emergency_e:
-                    logger.error(f"{symbol}: 緊急決済も失敗: {emergency_e}")
-
-                if emergency_success:
-                    return None
-
-                # 緊急決済失敗 → 逆指値なしでポジション登録（monitor_positionsに管理させる）
-                logger.error(f"{symbol}: 逆指値なし・緊急決済失敗 → ポジション登録して監視継続（要手動確認）")
-                self.notifier.send_error(f"🚨🚨 {symbol}: 逆指値なし・緊急決済失敗！ポジション監視中。手動で損切り注文を入れてください")
-                position_info = {
-                    'entry_order_id': entry_order_id,
-                    'stop_order_id': None,
-                    'target_order_id': None,
-                    'entry_price': actual_entry_price,
-                    'qty': qty,
-                    'stop_price': stop_price,
-                    'target_price': target_price,
-                    'entry_time': datetime.now(),
-                    'material_strength': '',
-                    'material_type': '',
-                    'volume_surge': 0.0,
-                    'entry_pattern': entry_pattern,
-                    'mfe_pct': 0.0,
-                    'mae_pct': 0.0,
-                    'entry_vwap_ratio': None,
-                    'entry_gap_pct': None,
-                    'opening_gap_pct': None,
-                }
-                self.active_positions[symbol] = position_info
-                return position_info
-
-            stop_order_id = stop_result['order_id']
-
-            # 利確はmonitor_positions()で監視型決済（W指値API非対応のため）
-            target_order_id = None
+            logger.info(f"{symbol}: 損切={stop_price}円(-1%) 利確={target_price}円(+2%) ※監視型（3秒ポーリング）")
 
             # エントリー時のVWAP・始値を取得（分析用）
             entry_vwap = symbol_info.get('vwap')
@@ -1057,33 +1003,47 @@ class TradeExecutor:
                 cp = pos_data.get('current_price') or 0
                 if cp <= 0:
                     continue
+                # 利確判定（+2%到達で成行売り）
                 if cp >= target_price:
-                    logger.info(f"{symbol}: 利確条件到達（現在値{cp} >= 目標{target_price}）→ 逆指値キャンセル→成行売り")
-                    # 逆指値キャンセル
-                    stop_order_id = pos_info.get('stop_order_id')
-                    if stop_order_id:
-                        try:
-                            self.kabu_client.cancel_order(stop_order_id)
-                        except Exception as e:
-                            logger.warning(f"{symbol}: 逆指値キャンセル失敗: {e}")
-                    # 成行売り
+                    logger.info(f"{symbol}: 利確条件到達（現在値{cp} >= 目標{target_price}）→ 成行売り")
                     qty = pos_info.get('qty')
                     try:
                         self.kabu_client.send_order(
                             symbol=symbol, exchange=9, side=1, qty=qty,
                             order_type=1, price=0
                         )
-                        # 利確成功 → トレード履歴保存 & active_positionsから削除
                         entry_price = pos_info.get('entry_price', 0)
                         profit_loss = (cp - entry_price) * qty if entry_price else 0
                         self.save_trade_history(symbol, entry_price, cp, qty, '利確')
                         del self.active_positions[symbol]
                         logger.info(f"{symbol}: 利確決済完了 {entry_price}円→{cp}円（{profit_loss:+,.0f}円）")
                         self.notifier.send_message(f"✅ {symbol}: 利確決済 {entry_price}円→{cp}円（{profit_loss:+,.0f}円）")
-                        break  # active_positionsを変更したのでループを抜ける
+                        break
                     except Exception as e:
                         logger.error(f"{symbol}: 利確成行売り失敗: {e}")
                         self.notifier.send_error(f"🚨 {symbol}: 利確決済失敗！手動確認必須: {e}")
+                    continue
+
+                # 損切り判定（-1%到達で成行売り）
+                stop_price = pos_info.get('stop_price')
+                if stop_price and cp <= stop_price:
+                    logger.info(f"{symbol}: 損切り条件到達（現在値{cp} <= 損切{stop_price}）→ 成行売り")
+                    qty = pos_info.get('qty')
+                    try:
+                        self.kabu_client.send_order(
+                            symbol=symbol, exchange=9, side=1, qty=qty,
+                            order_type=1, price=0
+                        )
+                        entry_price = pos_info.get('entry_price', 0)
+                        profit_loss = (cp - entry_price) * qty if entry_price else 0
+                        self.save_trade_history(symbol, entry_price, cp, qty, '損切り')
+                        del self.active_positions[symbol]
+                        logger.info(f"{symbol}: 損切り決済完了 {entry_price}円→{cp}円（{profit_loss:+,.0f}円）")
+                        self.notifier.send_message(f"✂️ {symbol}: 損切り決済 {entry_price}円→{cp}円（{profit_loss:+,.0f}円）")
+                        break
+                    except Exception as e:
+                        logger.error(f"{symbol}: 損切り成行売り失敗: {e}")
+                        self.notifier.send_error(f"🚨 {symbol}: 損切り決済失敗！手動確認必須: {e}")
 
             # 決済済みポジション検知（active_positionsにあるがAPIのポジションにない）
             closed_symbols = []

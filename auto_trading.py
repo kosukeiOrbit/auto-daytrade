@@ -105,14 +105,14 @@ def check_candidates_exist():
 
 
 def position_monitor_loop(executor, end_time):
-    """ポジション監視スレッド（30秒間隔）"""
+    """ポジション監視スレッド（3秒間隔・監視型損切り/利確）"""
     while datetime.now() < end_time:
         try:
             if len(executor.active_positions) > 0:
                 executor.monitor_positions()
         except Exception as e:
             logger.debug(f"ポジション監視エラー: {e}")
-        time.sleep(30)
+        time.sleep(3)
 
 
 def trading_loop(executor, notifier=None):
