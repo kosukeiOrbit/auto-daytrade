@@ -384,12 +384,18 @@ class TradeExecutor:
             # 逆指値はAPI非対応（SOR+信用で「即座に発動」エラー多発）のため
             # 損切り・利確ともmonitor_positions()の監視型で実行
             stop_price = int(actual_entry_price * 0.99)
-            target_price = int(actual_entry_price * 1.02)
+            # 利確価格（パターンによって変える）
+            if entry_pattern == 'A':
+                target_price = int(actual_entry_price * 1.02)   # A: +2.0%
+                target_pct = '+2.0%'
+            else:
+                target_price = int(actual_entry_price * 1.015)  # B: +1.5%（MFE分析より）
+                target_pct = '+1.5%'
 
             stop_order_id = None  # 監視型損切り（逆指値API不使用）
             target_order_id = None  # 監視型利確
 
-            logger.info(f"{symbol}: 損切={stop_price}円(-1%) 利確={target_price}円(+2%) ※監視型（3秒ポーリング）")
+            logger.info(f"{symbol}: 損切={stop_price}円(-1%) 利確={target_price}円({target_pct}) ※監視型（3秒ポーリング）")
 
             # エントリー時のVWAP・始値を取得（分析用）
             entry_vwap = symbol_info.get('vwap')
