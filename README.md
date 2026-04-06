@@ -1,13 +1,26 @@
-# デイトレ自動化システム
+# auto-daytrade
 
-日本株デイトレードの段階的自動化システム
+日本株デイトレード自動化システム（三菱UFJ eスマート証券 kabuステーションAPI）
 
-## 📋 目次
+## 概要
 
-- [セットアップ](#セットアップ)
-- [使い方](#使い方)
-- [プロジェクト構造](#プロジェクト構造)
-- [開発ステータス](#開発ステータス)
+- **パターンA**: 前日スクリーニング銘柄への寄り付き成行エントリー（利確+2% / 損切-1%）
+- **パターンB**: 場中の出来高急増銘柄への指値+1%エントリー（利確+1.5% / 損切-1%）
+- 本番稼働中（2026年3月19日〜）
+- 信用デイトレード（手数料・金利・貸株料無料）
+
+## 実行スケジュール
+
+| 時刻 | スクリプト | 内容 |
+|------|-----------|------|
+| 7:00 | morning_screening.py | スクリーニング・材料判定・候補CSV生成・Discord通知 |
+| 8:45 | auto_trading.py | 起動・パターンAエントリー・寄り付き待機 |
+| 9:00 | （市場） | 寄り付きで約定 → 約定確認 → 損切り/利確設定 |
+| 9:30〜15:25 | auto_trading.py | パターンBスキャン・エントリー（1分ごと） |
+| 常時 | 監視スレッド | ポジション監視（3秒ごと・利確/損切り判定） |
+| 11:25〜11:35 | auto_trading.py | 含み損ポジション強制決済 |
+| 15:15〜15:25 | auto_trading.py | 全ポジション強制決済 |
+| 15:30 | auto_trading.py | 日次レポート生成・Discord通知・終了 |
 
 ## セットアップ
 
@@ -15,7 +28,6 @@
 ```bash
 python -m venv venv
 venv\Scripts\activate  # Windows
-source venv/bin/activate  # macOS/Linux
 ```
 
 ### 2. 依存パッケージのインストール
@@ -24,181 +36,88 @@ pip install -r requirements.txt
 ```
 
 ### 3. 環境変数の設定
-`.env`ファイルを作成し、J-Quants APIキーを設定：
+`.env`ファイルを作成：
 
 ```bash
-# .env
-JQUANTS_API_KEY=your_api_key_here
+JQUANTS_API_KEY=your_key
+ANTHROPIC_API_KEY=your_key
+DISCORD_WEBHOOK_URL=your_url
+KABU_API_URL=http://localhost:18080/kabusapi
+KABU_API_PASSWORD=your_password
+INVESTMENT_RATIO=0.80
 ```
 
-> **注意**: J-Quants APIキーは[J-Quants公式サイト](https://application.jpx-jquants.com/)から取得してください（Lightプラン: 月1,650円）
-
-## 使い方
-
-### 1. スクリーニング実行
-
-指定した条件で候補銘柄を抽出：
-
-```bash
-python test_screening.py
-```
-
-**フィルタ条件**:
-- 前日比上昇率: 3%以上
-- 売買代金: 上位20銘柄
-- 1単元価格: 50万円以内
-
-**出力例**:
-```
-スクリーニング結果: 16銘柄
-平均上昇率: 8.85%
-最大上昇率: 23.54% (銘柄コード: 1234)
-```
-
-### 2. エントリー判定テスト
-
-VWAP・移動平均・トレンドなどの技術指標を使った判定ロジックをテスト：
-
-```bash
-python test_analysis.py
-```
-
-**判定条件**:
-- ギャップアップ: +8%以内
-- 現在上昇率: +8%以内
-- VWAP: 現在価格がVWAPを上回る
-- トレンド: 直近5本の足が上昇トレンド
-- VWAPタッチ: 直近5本でVWAP付近にタッチ
-
-### 3. バックテスト実行
-
-過去データで戦略の精度を検証：
-
-```bash
-python test_integrated_backtest.py
-```
-
-**バックテスト内容**:
-- 過去10日間（営業日のみ）の実データを使用
-- スクリーニング → エントリー判定 → 損益シミュレーション
-- パフォーマンス指標の計算（勝率・R倍数・最大DD等）
-
-**出力例**:
-```
-総トレード数: 9
-勝率: 0.00%
-総損益: +0円
-最大ドローダウン: 0円 (0.00%)
-```
-
-> **制約**: J-Quants API無料プランでは日足データのみ取得可能。正確な損益シミュレーションには5分足データが必要（kabuステーション連携後に対応予定）
-
-### 4. バックテスト結果の可視化
-
-グラフとチャートで結果を分析：
-
-```bash
-python test_visualization.py
-```
-
-**生成されるグラフ**:
-- `backtest_results/equity_curve_*.png` - 資金曲線
-- `backtest_results/trade_timeline_*.png` - トレード履歴タイムライン
-- `backtest_results/performance_summary_*.png` - パフォーマンスサマリー
-
-### 5. プログラムから利用
-
-```python
-from src.screening import Screener
-from src.analysis import check_entry
-from src.backtest import IntegratedBacktest, BacktestVisualizer
-from datetime import datetime, timedelta
-from dateutil import tz
-
-# 1. スクリーニング
-screener = Screener(budget=500_000)
-candidates = screener.get_candidates(
-    min_price_change_rate=3.0,
-    top_n_by_value=20
-)
-print(f"候補銘柄: {len(candidates)}銘柄")
-
-# 2. エントリー判定（例）
-ohlcv = [...]  # 5分足データ
-result = check_entry(
-    symbol="1234",
-    ohlcv=ohlcv,
-    current_price=1500,
-    prev_close=1400
-)
-if result["entry"]:
-    print(f"エントリー可: {result['entry_price']}円")
-    print(f"利確: {result['take_profit']}円")
-    print(f"損切: {result['stop_loss']}円")
-
-# 3. バックテスト実行
-jst = tz.gettz("Asia/Tokyo")
-backtest = IntegratedBacktest(initial_capital=500_000)
-metrics = backtest.run_historical_backtest(
-    start_date=datetime.now(jst) - timedelta(days=10),
-    end_date=datetime.now(jst),
-    budget=500_000,
-    min_change_rate=3.0,
-    top_n=20
-)
-metrics.display()
-
-# 4. 可視化
-visualizer = BacktestVisualizer(
-    trades=backtest.simulator.trades,
-    metrics=metrics
-)
-visualizer.plot_all(output_dir="backtest_results")
-```
+### 4. タスクスケジューラ登録（Windows）
+- 7:00: `python morning_screening.py`
+- 8:45: `python auto_trading.py`
 
 ## プロジェクト構造
 
 ```
 auto-daytrade/
+├── morning_screening.py              # 朝7:00スクリーニング
+├── auto_trading.py                   # 8:45自動売買（パターンA+B）
 ├── src/
-│   ├── screening/           # スクリーニング機能
-│   │   └── screener.py      # 銘柄抽出ロジック
-│   ├── analysis/            # チャート分析・判定ロジック
-│   │   ├── indicators.py    # VWAP・移動平均・トレンド計算
-│   │   └── entry_judge.py   # エントリー判定ロジック
-│   ├── backtest/            # バックテストフレームワーク
-│   │   ├── simulator.py     # トレードシミュレーター
-│   │   ├── metrics.py       # パフォーマンス指標計算
-│   │   ├── engine.py        # バックテストエンジン
-│   │   ├── integrated_backtest.py  # 統合バックテスト
-│   │   └── visualizer.py    # 結果可視化
-│   └── utils/               # 共通ユーティリティ
-│       └── jquants_client.py  # J-Quants API クライアント
-├── backtest_results/        # バックテスト結果（グラフ）
-├── test_*.py                # 各機能のテストスクリプト
-├── daytrade_automation.md   # 設計書（詳細）
-└── README.md                # このファイル
+│   ├── screening/
+│   │   └── screener.py               # 出来高急増・各種フィルタ
+│   ├── trading/
+│   │   └── trade_executor.py         # 発注・ポジション管理・決済・安全装置
+│   ├── backtest/
+│   │   ├── minute_backtest.py        # パターンA分足バックテスト
+│   │   └── pattern_b_backtest.py     # パターンB分足バックテスト
+│   └── utils/
+│       ├── config.py                 # 環境変数管理
+│       ├── jquants_client.py         # J-Quants APIクライアント
+│       ├── kabu_client.py            # kabuステーションAPIクライアント
+│       ├── cache_manager.py          # APIキャッシュ（週次/月次/日次）
+│       ├── market_sentiment.py       # 地合いチェック（kabuStation先物API+yfinance）
+│       ├── material_judge.py         # Claude API材料判定
+│       ├── tdnet_scraper.py          # TDnet適時開示スクレイピング
+│       ├── news_scraper.py           # 株探ニューススクレイピング
+│       └── notifier.py              # Discord通知
+├── scripts/
+│   ├── generate_historical_candidates.py  # 過去候補CSV一括生成
+│   ├── precompute_minute_cache.py    # 分足キャッシュ事前生成
+│   └── compare_ranking.py           # ランキング比較スクリプト
+├── run_minute_backtest.py            # パターンA分足バックテスト実行
+├── run_pattern_b_backtest.py         # パターンB分足バックテスト実行
+├── run_param_sweep.py                # 利確/損切パラメータスイープ
+├── test_pattern_b.py                 # パターンB単体検証（ドライラン）
+├── data/
+│   ├── candidates_YYYYMMDD.csv       # 日次スクリーニング結果
+│   ├── trade_history.csv             # 本番トレード履歴
+│   ├── daily_report_YYYYMMDD.json    # 日次レポート
+│   └── cache/                        # APIキャッシュ・分足キャッシュ
+├── equities_bars_minute/             # J-Quants分足データ（バックテスト用）
+├── backtest_results/                 # バックテスト結果CSV・グラフ
+├── logs/                             # 実行ログ
+├── daytrade_automation.md            # 設計書（詳細）
+└── requirements.txt
 ```
+
+## 使用ツール
+
+| カテゴリ | ツール | 料金 |
+|----------|--------|------|
+| 実行環境 | Python 3.13 | 無料 |
+| 発注API | kabuステーションAPI | 無料 |
+| 株価データ | J-Quants API Lightプラン | 月1,650円 |
+| 材料判定 | Anthropic Claude API | 月約300円 |
+| 通知 | Discord Webhook | 無料 |
 
 ## 開発ステータス
 
-**フェーズ1: 環境構築** ✅ 完了
-- Python環境・J-Quants API連携・GitHubリポジトリ作成
+- **フェーズ1: 環境構築** ✅ 完了
+- **フェーズ2: スクリーニング自動化** ✅ 完了
+- **フェーズ3: APIキャッシュ最適化** ✅ 完了
+- **フェーズ4: バックテスト検証** ✅ 完了（分足バックテスト・パラメータスイープ）
+- **フェーズ5: 自動発注** ✅ 完了（パターンA+B・信用デイトレード）
+- **フェーズ6: 本番稼働** ✅ 稼働中（2026年3月19日〜）
 
-**フェーズ2: スクリーニング自動化** ✅ 完了
-- 全銘柄データ取得・条件フィルタ・候補リスト生成
-
-**フェーズ3: チャート判定** ✅ 完了
-- VWAP・移動平均計算・エントリー判定ロジック実装
-
-**フェーズ4: バックテスト検証** ✅ 完了
-- トレードシミュレーター・パフォーマンス指標計算・可視化機能
-
-**フェーズ5: 自動発注** 🔜 未実装
-- kabuステーション連携（証券口座開設承認待ち）
+現在は本番稼働・改善フェーズ。
 
 詳細は[daytrade_automation.md](daytrade_automation.md)を参照。
 
 ---
 
-**免責事項**: 本システムは技術的な学習・研究目的のプロジェクトです。株式投資には元本割れのリスクがあります。投資判断は自己責任で行ってください。
+*免責事項: 本システムは技術的な学習・研究目的のプロジェクトです。株式投資には元本割れのリスクがあります。投資判断は自己責任で行ってください。*
