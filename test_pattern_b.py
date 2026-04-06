@@ -27,9 +27,9 @@ logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level:<7} | {mes
 
 # ポート設定
 TEST_API_URL = "http://localhost:18081/kabusapi"
-TEST_API_PASSWORD = "***REMOVED***"
-PROD_API_URL = "http://localhost:18080/kabusapi"
-PROD_API_PASSWORD = "***REMOVED***"
+TEST_API_PASSWORD = os.getenv("KABU_TEST_PASSWORD", "")
+PROD_API_URL = os.getenv("KABU_API_URL", "http://localhost:18080/kabusapi")
+PROD_API_PASSWORD = os.getenv("KABU_API_PASSWORD", "")
 
 
 def main():
