@@ -361,9 +361,9 @@ def main():
                         # 前日の上昇率を計算
                         prev_day_change_pct = ((prev_close_1 - prev_close_2) / prev_close_2) * 100
 
-                        # +10%以上の急騰銘柄は翌日反落リスクが高いため除外
-                        if prev_day_change_pct >= 10.0:
-                            logger.info(f"  {code}: 前日急騰除外 ({prev_day_change_pct:.1f}% >= 10%)")
+                        # +25%以上ならストップ高と判定
+                        if prev_day_change_pct >= 25.0:
+                            logger.info(f"  {code}: 前日ストップ高除外 ({prev_day_change_pct:.1f}% >= 25%)")
                             filtered_codes.append(code)
 
         except Exception as e:
