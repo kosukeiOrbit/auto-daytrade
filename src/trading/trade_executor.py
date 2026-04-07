@@ -497,18 +497,18 @@ class TradeExecutor:
 
         # 優先順位でソート
         # 1. material_strength: '強' > '中'
-        # 2. 同一強度内では VolumeSurgeRatio 降順
+        # 2. 同一強度内では TradingValue（売買代金絶対値）降順
         strength_order = {'強': 0, '中': 1}
         candidates_df['strength_rank'] = candidates_df['material_strength'].map(strength_order)
         candidates_df = candidates_df.sort_values(
-            by=['strength_rank', 'VolumeSurgeRatio'],
+            by=['strength_rank', 'TradingValue'],
             ascending=[True, False]
         )
         candidates_df = candidates_df.drop(columns=['strength_rank'])
 
         logger.info("優先順位ソート完了:")
         for idx, row in candidates_df.head(5).iterrows():
-            logger.info(f"  {idx+1}. {row['Code']}: {row['material_strength']} 出来高{row['VolumeSurgeRatio']:.2f}倍")
+            logger.info(f"  {idx+1}. {row['Code']}: {row['material_strength']} 売買代金{row['TradingValue']/1e8:.1f}億円 出来高{row['VolumeSurgeRatio']:.2f}倍")
 
         # 1日1銘柄エントリー（最優先銘柄のみ）
         entry_count = 0
