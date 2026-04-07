@@ -495,6 +495,23 @@ class TradeExecutor:
             logger.info("フィルタ後の候補銘柄がありません")
             return
 
+        # TOB・MBO銘柄を除外（material_summaryにキーワードが含まれる場合）
+        # morning_screening.pyで除外済みだが、2重チェックとして実施
+        tob_keywords = ['TOB', 'MBO', '公開買付', '株式交換', '完全子会社化', '非公開化']
+        if 'material_summary' in candidates_df.columns:
+            tob_mask = candidates_df['material_summary'].astype(str).apply(
+                lambda s: any(kw in s for kw in tob_keywords)
+            )
+            excluded_tob = candidates_df[tob_mask]
+            if len(excluded_tob) > 0:
+                for _, row in excluded_tob.iterrows():
+                    logger.info(f"TOB・MBO銘柄除外: {row.get('Code', '')} {row.get('material_summary', '')}")
+            candidates_df = candidates_df[~tob_mask]
+
+        if len(candidates_df) == 0:
+            logger.info("TOB・MBO除外後の候補銘柄がありません")
+            return
+
         # 優先順位でソート
         # 1. material_strength: '強' > '中'
         # 2. 同一強度内では TradingValue（売買代金絶対値）降順

@@ -328,6 +328,28 @@ def main():
                 f"{judgment['summary']}"
             )
 
+    # STEP 4.6: TOB・MBO銘柄除外フィルター
+    logger.info("\n" + "=" * 60)
+    logger.info("STEP 4.6: TOB・MBO銘柄除外フィルター")
+    logger.info("=" * 60)
+
+    tob_keywords = ['TOB', 'MBO', '公開買付', '株式交換', '完全子会社化', '非公開化']
+    tob_excluded = []
+    for code, judgment in list(judgments.items()):
+        if not judgment:
+            continue
+        summary = str(judgment.get('summary', ''))
+        material_type = str(judgment.get('material_type', ''))
+        if any(kw in summary or kw in material_type for kw in tob_keywords):
+            tob_excluded.append(code)
+            del judgments[code]
+            logger.info(f"  TOB・MBO銘柄除外: {code} {judgment.get('company_name', '')} {summary}")
+
+    if tob_excluded:
+        logger.info(f"TOB・MBO銘柄を{len(tob_excluded)}件除外しました")
+    else:
+        logger.info("TOB・MBO銘柄なし")
+
     # STEP 4.5: 前日ストップ高除外フィルタ
     logger.info("\n" + "=" * 60)
     logger.info("STEP 4.5: 前日ストップ高除外フィルタ")
