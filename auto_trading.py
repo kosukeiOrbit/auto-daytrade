@@ -307,6 +307,9 @@ def main():
             df_cand = pd.read_csv(csv_path, encoding='utf-8-sig')
             if 'material_strength' in df_cand.columns:
                 df_cand = df_cand[df_cand['material_strength'].isin(['強', '中'])]
+            # 売買代金5億円以上のみ（板薄・低位株を除外）
+            if 'TradingValue' in df_cand.columns:
+                df_cand = df_cand[df_cand['TradingValue'] >= 500_000_000]
             candidate_symbols = df_cand['Code'].astype(str).str[:4].tolist()
             executor.pattern_b_candidate_symbols = candidate_symbols
             if candidate_symbols:
