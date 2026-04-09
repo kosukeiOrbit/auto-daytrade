@@ -80,31 +80,43 @@ class DiscordNotifier:
         # 地合い・TDnet情報
         content += f"地合い: {sentiment_message} / TDnet開示: {tdnet_count}件\n\n"
 
-        # 上位5銘柄（材料ありのみ）
-        rank = 0
-        for idx, row in candidates_df.head(10).iterrows():
+        # パターンA選定順でソート: 材料あり・TOB除外・強>中>弱・同強度内TradingValue降順
+        tob_keywords = ['TOB', 'MBO', '公開買付', '株式交換', '完全子会社化', '非公開化']
+        strength_order = {'強': 0, '中': 1, '弱': 2}
+
+        sortable = []
+        for idx, row in candidates_df.iterrows():
             code = str(row['Code'])
-
-            # judgmentsに存在し、材料ありの場合のみ表示
-            if code not in judgments:
-                continue
-
-            judgment = judgments[code]
+            judgment = judgments.get(code)
             if not judgment or not judgment.get('has_material', False):
                 continue
+            summary = str(judgment.get('summary', ''))
+            material_type = str(judgment.get('material_type', ''))
+            if any(kw in summary or kw in material_type for kw in tob_keywords):
+                continue
+            strength = judgment.get('strength', '弱')
+            trading_value = row.get('TradingValue', 0) or 0
+            sortable.append((
+                strength_order.get(strength, 9),
+                -trading_value,
+                row,
+                judgment
+            ))
 
-            rank += 1
-            if rank > 5:
-                break
+        sortable.sort(key=lambda x: (x[0], x[1]))
 
-            # 銘柄情報
+        # 上位5銘柄を表示
+        for rank, (_, _, row, judgment) in enumerate(sortable[:5], start=1):
+            code = str(row['Code'])
             surge_ratio = row.get('VolumeSurgeRatio', 0)
             close_price = row.get('C', 0)
+            trading_value = row.get('TradingValue', 0) or 0
+            tv_oku = trading_value / 1e8
             company_name = judgment.get('company_name', '')
 
-            content += f"**{rank}位 {code} {company_name}** ×{surge_ratio:.1f}倍 | {close_price:.0f}円\n"
+            label = "  ← パターンA選定" if rank == 1 else ""
+            content += f"**{rank}位 {code} {company_name}** ×{surge_ratio:.1f}倍 | {close_price:,.0f}円 | 売買代金{tv_oku:.1f}億{label}\n"
 
-            # 材料判定結果
             material_type = judgment.get('material_type', '-')
             strength = judgment.get('strength', '-')
             summary = judgment.get('summary', '-')
