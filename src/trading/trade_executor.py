@@ -369,15 +369,34 @@ class TradeExecutor:
             actual_entry_price = None
             for _ in range(max_tries):
                 time.sleep(5)
-                positions = self.kabu_client.get_positions()
-                filled_pos = next(
-                    (p for p in positions if p['symbol'] == symbol and (p.get('qty') or 0) > 0),
-                    None
-                )
-                if filled_pos:
-                    actual_entry_price = filled_pos.get('price')
-                    logger.success(f"{symbol}: 約定確認OK（約定価格={actual_entry_price}円）")
-                    break
+                try:
+                    orders = self.kabu_client.get_orders(symbol=symbol)
+                    matched = next(
+                        (o for o in orders
+                         if o['order_id'] == entry_order_id
+                         and o['state'] == 5
+                         and (o.get('cum_qty') or 0) >= qty),
+                        None
+                    )
+                    if matched:
+                        actual_entry_price = matched.get('exec_price') or matched.get('price')
+                        logger.success(f"{symbol}: 約定確認OK（注文ID={entry_order_id} 約定価格={actual_entry_price}円 数量={matched.get('cum_qty')}株）")
+                        break
+                except Exception as e:
+                    logger.warning(f"{symbol}: 約定確認エラー（get_orders失敗）: {e}")
+                    # フォールバック：get_positions()で確認
+                    try:
+                        positions = self.kabu_client.get_positions()
+                        filled_pos = next(
+                            (p for p in positions if p['symbol'] == symbol and (p.get('qty') or 0) > 0),
+                            None
+                        )
+                        if filled_pos:
+                            actual_entry_price = filled_pos.get('price')
+                            logger.success(f"{symbol}: 約定確認OK（フォールバック 約定価格={actual_entry_price}円）")
+                            break
+                    except Exception as e2:
+                        logger.warning(f"{symbol}: フォールバック確認エラー: {e2}")
 
             if actual_entry_price is None:
                 logger.warning(f"{symbol}: 約定タイムアウト → 注文キャンセル")
