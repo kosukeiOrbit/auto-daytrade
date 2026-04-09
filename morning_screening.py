@@ -106,12 +106,15 @@ def main():
         budget = 800_000
         logger.warning("前日レポートも取得できず、固定予算を使用: 800,000円")
 
+    # スクリーニングフィルター用：1銘柄あたり上限（信用余力ベースに合わせる）
+    filter_budget = 400_000
+
     # STEP 1a: 出来高急増銘柄を抽出
     logger.info("\n" + "=" * 60)
     logger.info("STEP 1a: 出来高急増銘柄を抽出")
     logger.info("=" * 60)
 
-    screener = Screener(budget=budget)
+    screener = Screener(budget=filter_budget)
     volume_candidates = screener.get_volume_surge_candidates(
         surge_threshold=2.0,  # 20日平均の2倍以上
         lookback_days=20,
@@ -192,8 +195,8 @@ def main():
 
                 # 予算フィルタ（1単元=100株が買える銘柄のみ）
                 unit_price = row['C'] * 100
-                if unit_price > budget:
-                    logger.info(f"  {code}: 予算超過（{unit_price:,.0f}円）")
+                if unit_price > filter_budget:
+                    logger.info(f"  {code}: 予算超過（{unit_price:,.0f}円 > 上限{filter_budget:,}円）")
                     continue
 
                 tdnet_additions.append({
