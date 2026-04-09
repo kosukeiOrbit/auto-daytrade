@@ -31,6 +31,12 @@ class TradeExecutor:
         self.max_daily_loss_rate = max_daily_loss_rate
         self.max_consecutive_losses = max_consecutive_losses
 
+        # ポジション管理定数
+        self.max_positions_a = 2       # パターンA最大保有数
+        self.max_positions_b = 3       # パターンB最大保有数
+        self.max_positions_total = 3   # 合計最大保有数
+        self.max_entry_amount = 400_000  # 1銘柄あたりの投資上限（40万円）
+
         # トレード状態管理
         self.daily_profit_loss = 0.0  # 日次損益（決済のたびに更新）
         self.consecutive_losses = 0   # 連敗カウント（決済のたびに更新）
@@ -257,21 +263,20 @@ class TradeExecutor:
         """
         # 買付余力を取得
         try:
-            wallet = self.kabu_client.get_wallet_cash()
-            available_cash = wallet['stock_account_wallet']
+            wallet = self.kabu_client.get_wallet_margin()
+            available = wallet['margin_account_wallet']
 
-            # 検証環境の場合（nullの場合）は固定予算を使用
-            if available_cash is None:
+            if available is None:
                 usable_budget = self.budget
-                logger.warning(f"検証環境のため固定予算を使用: {self.budget:,}円")
+                logger.warning("信用余力取得失敗、固定予算を使用")
             else:
-                # 本番環境: 買付余力と予算の小さい方を使用
-                usable_budget = min(available_cash, self.budget)
-                logger.info(f"買付余力: {available_cash:,}円, 使用予算: {usable_budget:,}円")
+                # 1銘柄あたりの上限：信用余力÷最大ポジション数 と max_entry_amount の小さい方
+                per_position = available / self.max_positions_total
+                usable_budget = min(per_position, self.max_entry_amount, self.budget)
+                logger.info(f"信用余力: {available:,.0f}円 → 1銘柄予算: {usable_budget:,.0f}円")
 
         except Exception as e:
-            # API取得失敗時は固定予算を使用
-            logger.warning(f"買付余力取得エラー、固定予算を使用: {e}")
+            logger.warning(f"信用余力取得エラー、固定予算を使用: {e}")
             usable_budget = self.budget
 
         # 1銘柄あたりの予算で購入できる株数
@@ -527,9 +532,18 @@ class TradeExecutor:
         for idx, row in candidates_df.head(5).iterrows():
             logger.info(f"  {idx+1}. {row['Code']}: {row['material_strength']} 売買代金{row['TradingValue']/1e8:.1f}億円 出来高{row['VolumeSurgeRatio']:.2f}倍")
 
-        # 1日1銘柄エントリー（最優先銘柄のみ）
+        # 最大2銘柄エントリー（パターンA上限）
         entry_count = 0
         for idx, row in candidates_df.iterrows():
+            # パターンA上限チェック
+            pattern_a_count = sum(1 for v in self.active_positions.values() if v.get('entry_pattern') == 'A')
+            if pattern_a_count >= self.max_positions_a:
+                logger.info(f"パターンA上限到達（{pattern_a_count}/{self.max_positions_a}）")
+                break
+            if len(self.active_positions) >= self.max_positions_total:
+                logger.info(f"合計ポジション上限到達（{len(self.active_positions)}/{self.max_positions_total}）")
+                break
+
             symbol = str(row['Code'])
 
             # 10:30以降はエントリーしない
@@ -538,7 +552,7 @@ class TradeExecutor:
                 logger.info("エントリー期限（10:30）を過ぎたためスキップ")
                 break
 
-            logger.info(f"\n[エントリー候補] {symbol} ({row['material_strength']}, 出来高{row['VolumeSurgeRatio']:.2f}倍)")
+            logger.info(f"\n[エントリー候補] {symbol} ({row['material_strength']}, 売買代金{row['TradingValue']/1e8:.1f}億円)")
 
             # エントリーシグナルチェック（寄成注文のため現在値チェックスキップ）
             if not self.check_entry_signal(symbol, pre_open=True):
@@ -563,8 +577,8 @@ class TradeExecutor:
                     position['opening_gap_pct'] = None
 
                 entry_count += 1
-                logger.success(f"{symbol}: エントリー成功 → 1日1銘柄ルールにより終了")
-                break  # 1銘柄エントリーしたら終了
+                logger.success(f"{symbol}: エントリー成功（パターンA {pattern_a_count+1}/{self.max_positions_a}）")
+                # breakしない → 次の候補へ（上限まで継続）
             else:
                 logger.warning(f"{symbol}: エントリー失敗 → 次の候補へ")
 
@@ -1035,6 +1049,14 @@ class TradeExecutor:
                             symbol=symbol, exchange=9, side=1, qty=qty,
                             order_type=1, price=0
                         )
+                        # OCO補完：逆指値注文があればキャンセル
+                        stop_order_id = pos_info.get('stop_order_id')
+                        if stop_order_id:
+                            try:
+                                self.kabu_client.cancel_order(stop_order_id)
+                                logger.info(f"{symbol}: 逆指値注文キャンセル完了（OCO）")
+                            except Exception as e:
+                                logger.warning(f"{symbol}: 逆指値キャンセル失敗（手動確認推奨）: {e}")
                         entry_price = pos_info.get('entry_price', 0)
                         profit_loss = (cp - entry_price) * qty if entry_price else 0
                         self.save_trade_history(symbol, entry_price, cp, qty, '利確')
@@ -1367,8 +1389,14 @@ class TradeExecutor:
         Returns:
             bool: エントリー可能ならTrue
         """
-        # ポジション保有中はスキップ（1銘柄制限）
-        if len(self.active_positions) > 0:
+        # パターンB上限チェック
+        pattern_b_count = sum(1 for v in self.active_positions.values() if v.get('entry_pattern') == 'B')
+        if pattern_b_count >= self.max_positions_b:
+            return False
+        if len(self.active_positions) >= self.max_positions_total:
+            return False
+        # 同一銘柄への重複エントリー防止
+        if symbol in self.active_positions:
             return False
 
         # エントリー失敗銘柄は当日中スキップ

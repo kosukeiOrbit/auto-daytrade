@@ -132,6 +132,31 @@ class KabuClient:
             logger.error(f"買付余力取得エラー: {e}")
             raise
 
+    def get_wallet_margin(self):
+        """
+        信用取引余力を取得（/wallet/margin）
+
+        Returns:
+            dict: {'margin_account_wallet': float}
+        """
+        try:
+            url = f"{self.api_url}/wallet/margin"
+            response = self._api_request(requests.get, url)
+            if response.status_code == 200:
+                data = response.json()
+                result = {
+                    'margin_account_wallet': data.get('MarginAccountWallet')
+                }
+                logger.info(f"信用余力取得成功: {result['margin_account_wallet']:,.0f}円")
+                return result
+            else:
+                error_msg = f"信用余力取得失敗: {response.status_code} - {response.text}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+        except Exception as e:
+            logger.error(f"信用余力取得エラー: {e}")
+            raise
+
     def get_symbol(self, symbol, exchange=1):
         """
         銘柄情報を取得（時価情報・板情報）

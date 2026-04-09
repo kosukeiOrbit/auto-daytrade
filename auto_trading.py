@@ -180,15 +180,20 @@ def trading_loop(executor, notifier=None):
         # パターンB: 場中動意銘柄エントリー（9:30〜10:30、フラグ有効時のみ）
         if PATTERN_B_ENABLED and 9 <= current_hour <= 10:
             in_pattern_b_window = (current_hour == 9 and current_minute >= 30) or (current_hour == 10 and current_minute <= 30)
-            if in_pattern_b_window and len(executor.active_positions) == 0:
+            pattern_b_count = sum(1 for v in executor.active_positions.values() if v.get('entry_pattern') == 'B')
+            total_count = len(executor.active_positions)
+            if in_pattern_b_window and total_count < executor.max_positions_total and pattern_b_count < executor.max_positions_b:
                 try:
                     top_symbols = executor.scan_pattern_b_candidates()
                     for symbol in top_symbols:
+                        pattern_b_count = sum(1 for v in executor.active_positions.values() if v.get('entry_pattern') == 'B')
+                        total_count = len(executor.active_positions)
+                        if total_count >= executor.max_positions_total or pattern_b_count >= executor.max_positions_b:
+                            break
                         if executor.check_pattern_b_entry(symbol):
                             position = executor.execute_pattern_b_entry(symbol)
                             if position:
-                                logger.success(f"パターンBエントリー成功: {symbol}")
-                                break
+                                logger.success(f"パターンBエントリー成功: {symbol}（B:{pattern_b_count+1}/{executor.max_positions_b} 合計:{total_count+1}/{executor.max_positions_total}）")
                 except Exception as e:
                     logger.error(f"パターンBエラー: {e}")
 
