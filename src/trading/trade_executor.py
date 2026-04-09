@@ -356,10 +356,12 @@ class TradeExecutor:
             if entry_pattern == 'A':
                 now = datetime.now()
                 market_open = now.replace(hour=9, minute=0, second=30, microsecond=0)
-                if now < market_open:
-                    wait_seconds = (market_open - now).seconds
-                    logger.info(f"{symbol}: 寄り付き待機 {wait_seconds}秒")
+                wait_seconds = (market_open - now).total_seconds()
+                if wait_seconds > 0:
+                    logger.info(f"{symbol}: 寄り付き待機 {wait_seconds:.0f}秒")
                     time.sleep(wait_seconds)
+                else:
+                    logger.info(f"{symbol}: 既に9:00:30を過ぎているため待機スキップ")
                 max_tries = 12  # 5秒×12回=最大1分
             else:
                 max_tries = 6   # 5秒×6回=最大30秒
@@ -687,7 +689,7 @@ class TradeExecutor:
                     self._cancel_existing_orders(symbol, pos_info)
 
                     # 成行売り注文
-                    self.kabu_client.send_order(
+                    result = self.kabu_client.send_order(
                         symbol=symbol,
                         exchange=9,
                         side=1,  # 1=売
@@ -696,9 +698,20 @@ class TradeExecutor:
                         price=0
                     )
 
+                    # result_codeチェック
+                    if result.get('result_code') != 0:
+                        logger.error(f"{symbol}: 前場強制決済注文失敗 result_code={result.get('result_code')}")
+                        self.notifier.send_error(f"⚠️ {symbol}: 前場強制決済失敗！手動確認を推奨")
+                        continue
+
                     # トレード履歴保存
                     entry_price = pos_info.get('entry_price', 0)
                     self.save_trade_history(symbol, entry_price, pos['current_price'], qty, '前場強制')
+
+                    # active_positionsから削除
+                    if symbol in self.active_positions:
+                        del self.active_positions[symbol]
+                        logger.info(f"{symbol}: active_positionsから削除（前場強制決済完了）")
 
                     # Discord通知
                     self.notifier.send_trade_notification(
@@ -749,7 +762,7 @@ class TradeExecutor:
                 self._cancel_existing_orders(symbol, pos_info)
 
                 # 成行売り注文
-                self.kabu_client.send_order(
+                result = self.kabu_client.send_order(
                     symbol=symbol,
                     exchange=9,
                     side=1,  # 1=売
@@ -758,10 +771,21 @@ class TradeExecutor:
                     price=0
                 )
 
+                # result_codeチェック
+                if result.get('result_code') != 0:
+                    logger.error(f"{symbol}: 大引強制決済注文失敗 result_code={result.get('result_code')}")
+                    self.notifier.send_error(f"⚠️ {symbol}: 大引強制決済失敗！手動確認を推奨")
+                    continue
+
                 # トレード履歴保存
                 entry_price = pos_info.get('entry_price', 0)
                 exit_reason = '大引強制'
                 self.save_trade_history(symbol, entry_price, pos['current_price'], qty, exit_reason)
+
+                # active_positionsから削除
+                if symbol in self.active_positions:
+                    del self.active_positions[symbol]
+                    logger.info(f"{symbol}: active_positionsから削除（大引強制決済完了）")
 
                 # Discord通知
                 self.notifier.send_trade_notification(
