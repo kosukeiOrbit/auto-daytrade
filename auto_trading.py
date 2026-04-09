@@ -242,32 +242,32 @@ def main():
         logger.warning(warning_msg)
         notifier.send_message(f"⚠️ {warning_msg}")
 
-    # STEP 3: 買付余力取得と予算計算
+    # STEP 3: 信用余力取得と予算計算
     logger.info("=" * 60)
-    logger.info("買付余力取得")
+    logger.info("信用余力取得")
     logger.info("=" * 60)
 
     try:
         client = KabuClient()
-        wallet = client.get_wallet_cash()
-        available_cash = wallet['stock_account_wallet']
+        wallet = client.get_wallet_margin()
+        available_cash = wallet['margin_account_wallet']
 
         # 検証環境の場合（nullの場合）は固定予算を使用
         if available_cash is None:
             budget = 800_000
             logger.warning(f"検証環境のため固定予算を使用: {budget:,}円")
         else:
-            # 本番環境: 買付余力 × 投資比率
+            # 本番環境: 信用余力 × 投資比率
             budget = int(available_cash * Config.INVESTMENT_RATIO)
-            logger.info(f"買付余力: {available_cash:,}円 × {Config.INVESTMENT_RATIO} = 本日の投資予算: {budget:,}円")
+            logger.info(f"信用余力: {available_cash:,.0f}円 × {Config.INVESTMENT_RATIO} = 本日の投資予算: {budget:,}円")
 
     except Exception as e:
         # API取得失敗時は固定予算を使用
         budget = 800_000
         available_cash = None
-        logger.warning(f"買付余力取得エラー、固定予算を使用: {e}")
+        logger.warning(f"信用余力取得エラー、固定予算を使用: {e}")
 
-    # 開場時の買付余力を保存（日次レポート用）
+    # 開場時の信用余力を保存（日次レポート用）
     opening_wallet = available_cash
 
     # STEP 4: TradeExecutor初期化
