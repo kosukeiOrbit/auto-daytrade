@@ -554,61 +554,178 @@ class TradeExecutor:
         for idx, row in candidates_df.head(5).iterrows():
             logger.info(f"  {idx+1}. {row['Code']}: {row['material_strength']} 売買代金{row['TradingValue']/1e8:.1f}億円 出来高{row['VolumeSurgeRatio']:.2f}倍")
 
-        # 最大2銘柄エントリー（パターンA上限）
-        entry_count = 0
+        # ====== フェーズ1: 注文発注（寄り前に全銘柄分を一括発注）======
+        logger.info("=" * 60)
+        logger.info("フェーズ1: 注文発注")
+        logger.info("=" * 60)
+
+        pending_orders = []  # [(symbol, entry_order_id, qty, current_price, row)]
+        order_count = 0
         for idx, row in candidates_df.iterrows():
-            # パターンA上限チェック
-            pattern_a_count = sum(1 for v in self.active_positions.values() if v.get('entry_pattern') == 'A')
-            if pattern_a_count >= self.max_positions_a:
-                logger.info(f"パターンA上限到達（{pattern_a_count}/{self.max_positions_a}）")
-                break
-            if len(self.active_positions) >= self.max_positions_total:
-                logger.info(f"合計ポジション上限到達（{len(self.active_positions)}/{self.max_positions_total}）")
+            if order_count >= self.max_positions_a:
+                logger.info(f"パターンA注文上限到達（{order_count}/{self.max_positions_a}）")
                 break
 
             symbol = str(row['Code'])
 
-            # 10:30以降はエントリーしない
+            # 9:05以降はスキップ
             now = datetime.now()
-            if now.time() > datetime.strptime("10:30", "%H:%M").time():
-                logger.info("エントリー期限（10:30）を過ぎたためスキップ")
+            if now.hour > 9 or (now.hour == 9 and now.minute >= 5):
+                logger.warning(f"パターンA: 9:05以降のため本日のエントリーをスキップ（現在時刻: {now.strftime('%H:%M')}）")
                 break
 
             logger.info(f"\n[エントリー候補] {symbol} ({row['material_strength']}, 売買代金{row['TradingValue']/1e8:.1f}億円)")
 
-            # エントリーシグナルチェック（寄成注文のため現在値チェックスキップ）
+            # エントリーシグナルチェック
             if not self.check_entry_signal(symbol, pre_open=True):
                 logger.info(f"{symbol}: エントリー条件不適合 → 次の候補へ")
                 continue
 
-            # エントリー実行
-            position = self.entry_with_stop_and_target(symbol, entry_pattern='A')
+            # ブラックリストチェック
+            if symbol in self.entry_blacklist:
+                logger.info(f"{symbol}: ブラックリスト → スキップ")
+                continue
 
-            if position:
-                # candidate情報をposition_infoに付与
-                position['material_strength'] = row.get('material_strength', '')
-                position['material_type'] = row.get('material_type', '')
-                position['volume_surge'] = row.get('VolumeSurgeRatio', 0.0)
+            # 銘柄情報取得・注文発注
+            try:
+                self.kabu_client.unregister_all()
+                symbol_info = self.kabu_client.get_symbol(symbol, exchange=1)
+                current_price = symbol_info.get('ask_price') or symbol_info.get('current_price') or 0
+                if current_price <= 0:
+                    logger.warning(f"{symbol}: 現在値取得失敗")
+                    continue
 
-                # opening_gap_pct: エントリー価格 ÷ 前日終値 - 1（%）
-                prev_close = row.get('C') or row.get('Close') or 0
-                entry_price = position.get('entry_price', 0)
-                if prev_close and prev_close > 0 and entry_price > 0:
-                    position['opening_gap_pct'] = round((entry_price / prev_close - 1) * 100, 4)
-                else:
-                    position['opening_gap_pct'] = None
+                qty = self.calculate_position_size(current_price)
+                if qty == 0:
+                    continue
 
-                entry_count += 1
-                logger.success(f"{symbol}: エントリー成功（パターンA {pattern_a_count+1}/{self.max_positions_a}）")
-                # breakしない → 次の候補へ（上限まで継続）
-            else:
-                logger.warning(f"{symbol}: エントリー失敗 → 次の候補へ")
+                limit_price = int(current_price * 1.05)
+                logger.info(f"{symbol}: 注文発注 {qty}株 @ 指値{limit_price}円（前日終値{current_price}+5%）")
+                entry_result = self.kabu_client.send_order(
+                    symbol=symbol, exchange=9, side=2, qty=qty,
+                    order_type=2, price=limit_price
+                )
+                if entry_result['result_code'] != 0:
+                    logger.error(f"{symbol}: 注文失敗")
+                    self.entry_blacklist.add(symbol)
+                    continue
+
+                entry_order_id = entry_result['order_id']
+                logger.success(f"{symbol}: 注文成功 ID={entry_order_id}")
+                pending_orders.append((symbol, entry_order_id, qty, current_price, row))
+                order_count += 1
+
+            except Exception as e:
+                logger.error(f"{symbol}: 注文エラー: {e}")
+                self.entry_blacklist.add(symbol)
+                self.notifier.send_error(f"エントリーエラー: {symbol} - {str(e)[:100]}")
+
+        if not pending_orders:
+            logger.info("注文なし")
+            logger.info("=" * 60)
+            logger.info("日次自動売買完了: エントリー 0銘柄")
+            logger.info("=" * 60)
+            self.notifier.send_message(f"自動売買完了\nエントリー: 0銘柄\n候補: {len(candidates_df)}銘柄")
+            return
+
+        # ====== フェーズ2: 寄り付き待機 ======
+        now = datetime.now()
+        market_open = now.replace(hour=9, minute=0, second=30, microsecond=0)
+        wait_seconds = (market_open - now).total_seconds()
+        if wait_seconds > 0:
+            logger.info(f"寄り付き待機 {wait_seconds:.0f}秒（{len(pending_orders)}銘柄の注文済み）")
+            time.sleep(wait_seconds)
+        else:
+            logger.info("既に9:00:30を過ぎているため待機スキップ")
+
+        # ====== フェーズ3: 約定確認・損切り/利確設定 ======
+        logger.info("=" * 60)
+        logger.info("フェーズ3: 約定確認")
+        logger.info("=" * 60)
+
+        entry_count = 0
+        for symbol, entry_order_id, qty, current_price, row in pending_orders:
+            # 約定確認（5秒×12回=最大1分）
+            actual_entry_price = None
+            for _ in range(12):
+                time.sleep(5)
+                try:
+                    orders = self.kabu_client.get_orders(symbol=symbol)
+                    matched = next(
+                        (o for o in orders
+                         if o['order_id'] == entry_order_id
+                         and o['state'] == 5
+                         and (o.get('cum_qty') or 0) >= qty),
+                        None
+                    )
+                    if matched:
+                        actual_entry_price = matched.get('exec_price') or matched.get('price')
+                        logger.success(f"{symbol}: 約定確認OK（約定価格={actual_entry_price}円）")
+                        break
+                except Exception as e:
+                    logger.warning(f"{symbol}: get_orders失敗: {e}")
+
+            if actual_entry_price is None:
+                logger.warning(f"{symbol}: 約定タイムアウト → 注文キャンセル")
+                try:
+                    self.kabu_client.cancel_order(entry_order_id)
+                except Exception as e:
+                    logger.error(f"{symbol}: キャンセル失敗: {e}")
+                continue
+
+            # 損切り・利確を約定価格基準で設定
+            stop_price = int(actual_entry_price * 0.99)
+            target_price = int(actual_entry_price * 1.02)
+
+            symbol_info = self.kabu_client.get_symbol(symbol, exchange=1)
+            entry_vwap = symbol_info.get('vwap')
+            entry_opening = symbol_info.get('opening_price')
+            entry_vwap_ratio = ((actual_entry_price / entry_vwap) - 1) * 100 if entry_vwap and entry_vwap > 0 else None
+            entry_gap_pct = ((actual_entry_price / entry_opening) - 1) * 100 if entry_opening and entry_opening > 0 else None
+
+            position_info = {
+                'entry_order_id': entry_order_id,
+                'stop_order_id': None,
+                'target_order_id': None,
+                'entry_price': actual_entry_price,
+                'qty': qty,
+                'stop_price': stop_price,
+                'target_price': target_price,
+                'entry_time': datetime.now(),
+                'material_strength': row.get('material_strength', ''),
+                'material_type': row.get('material_type', ''),
+                'volume_surge': row.get('VolumeSurgeRatio', 0.0),
+                'entry_pattern': 'A',
+                'mfe_pct': 0.0,
+                'mae_pct': 0.0,
+                'entry_vwap_ratio': round(entry_vwap_ratio, 4) if entry_vwap_ratio is not None else None,
+                'entry_gap_pct': round(entry_gap_pct, 4) if entry_gap_pct is not None else None,
+                'opening_gap_pct': None,
+            }
+
+            # opening_gap_pct
+            prev_close = row.get('C') or row.get('Close') or 0
+            if prev_close and prev_close > 0 and actual_entry_price > 0:
+                position_info['opening_gap_pct'] = round((actual_entry_price / prev_close - 1) * 100, 4)
+
+            self.active_positions[symbol] = position_info
+
+            self.notifier.send_trade_notification(
+                action="エントリー",
+                symbol=symbol,
+                price=actual_entry_price,
+                qty=qty,
+                stop_price=stop_price,
+                target_price=target_price
+            )
+
+            logger.success(f"{symbol}: エントリー完了 {qty}株@{actual_entry_price}円 損切={stop_price} 利確={target_price}（監視型3秒）")
+            entry_count += 1
 
         logger.info("=" * 60)
         logger.info(f"日次自動売買完了: エントリー {entry_count}銘柄")
         logger.info("=" * 60)
 
-        # 完了通知
         self.notifier.send_message(
             f"自動売買完了\nエントリー: {entry_count}銘柄\n候補: {len(candidates_df)}銘柄"
         )
