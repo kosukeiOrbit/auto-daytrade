@@ -81,7 +81,8 @@ class DiscordNotifier:
         content += f"地合い: {sentiment_message} / TDnet開示: {tdnet_count}件\n\n"
 
         # パターンA選定順でソート: 材料あり・TOB除外・強>中>弱・同強度内TradingValue降順
-        tob_keywords = ['TOB', 'MBO', '公開買付', '株式交換', '完全子会社化', '非公開化']
+        tob_keywords = ['TOB', 'MBO', '公開買付', '株式交換', '完全子会社化', '非公開化',
+                    '買収防衛', 'スクイーズアウト', '株式併合', '上場廃止']
         strength_order = {'強': 0, '中': 1, '弱': 2}
 
         sortable = []

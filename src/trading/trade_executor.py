@@ -523,7 +523,8 @@ class TradeExecutor:
 
         # TOB・MBO銘柄を除外（material_summaryにキーワードが含まれる場合）
         # morning_screening.pyで除外済みだが、2重チェックとして実施
-        tob_keywords = ['TOB', 'MBO', '公開買付', '株式交換', '完全子会社化', '非公開化']
+        tob_keywords = ['TOB', 'MBO', '公開買付', '株式交換', '完全子会社化', '非公開化',
+                    '買収防衛', 'スクイーズアウト', '株式併合', '上場廃止']
         if 'material_summary' in candidates_df.columns:
             tob_mask = candidates_df['material_summary'].astype(str).apply(
                 lambda s: any(kw in s for kw in tob_keywords)

@@ -336,7 +336,8 @@ def main():
     logger.info("STEP 4.6: TOB・MBO銘柄除外フィルター")
     logger.info("=" * 60)
 
-    tob_keywords = ['TOB', 'MBO', '公開買付', '株式交換', '完全子会社化', '非公開化']
+    tob_keywords = ['TOB', 'MBO', '公開買付', '株式交換', '完全子会社化', '非公開化',
+                    '買収防衛', 'スクイーズアウト', '株式併合', '上場廃止']
     tob_excluded = []
     for code, judgment in list(judgments.items()):
         if not judgment:
