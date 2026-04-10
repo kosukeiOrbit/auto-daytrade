@@ -354,9 +354,9 @@ def main():
     else:
         logger.info("TOB・MBO銘柄なし")
 
-    # STEP 4.5: 前日ストップ高除外フィルタ
+    # STEP 4.5: 前日急騰・暴落除外フィルタ
     logger.info("\n" + "=" * 60)
-    logger.info("STEP 4.5: 前日ストップ高除外フィルタ")
+    logger.info("STEP 4.5: 前日急騰・暴落除外フィルタ")
     logger.info("=" * 60)
 
     filtered_codes = []
@@ -390,6 +390,10 @@ def main():
                         # +25%以上ならストップ高と判定
                         if prev_day_change_pct >= 25.0:
                             logger.info(f"  {code}: 前日ストップ高除外 ({prev_day_change_pct:.1f}% >= 25%)")
+                            filtered_codes.append(code)
+                        # -10%以下なら暴落と判定
+                        if prev_day_change_pct <= -10.0:
+                            logger.info(f"  {code}: 前日暴落除外 ({prev_day_change_pct:.1f}% <= -10%)")
                             filtered_codes.append(code)
 
         except Exception as e:
