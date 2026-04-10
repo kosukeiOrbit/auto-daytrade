@@ -1336,11 +1336,11 @@ class TradeExecutor:
     # ========== パターンB エントリーロジック ==========
 
     def _is_etf(self, symbol, symbol_name):
-        """ETF/ETN/REITかどうか判定（短縮名・正式名の両方に対応）"""
+        """ETF/ETN/REITかどうか判定（銘柄名キーワードベース）"""
         etf_keywords = ['ETF', 'ETN', '投信', '上場投信', '債券', 'リート', 'REIT',
                         'インデックス', 'ファンド', 'ヘッジ', 'ブル', 'ベア',
-                        'レバレッジ', '先進国', '新興国', 'ナスダック', 'S&P', 'TOPIX',
-                        'MAXIS', 'NEXT', 'ダイワ', '野村', 'iシェアーズ',
+                        'レバレッジ', '先進国', '新興国', 'ナスダック', 'ダウ', 'S&P', 'TOPIX',
+                        'MAXIS', 'NEXT', 'iシェアーズ', '先物', '上場投資信託', '連動',
                         # 全角対応
                         'ＥＴＦ', 'ＥＴＮ', 'ＲＥＩＴ',
                         # 短縮名対応
@@ -1349,13 +1349,16 @@ class TradeExecutor:
         for keyword in etf_keywords:
             if keyword in symbol_name:
                 return True
-        # 英数字混在コード（534A等）はETF/ETN
+        # 数値のみのコードで1000〜9999の範囲外は除外（ETF/インフラファンド等）
         try:
             code = int(symbol)
             if code < 1000 or code > 9999:
                 return True
         except ValueError:
-            return True
+            # 英数字混在コード（213A, 346A, 549A等）
+            # 2024年以降は個別株にも使われるため、銘柄名キーワードで判定済み
+            # キーワードに該当しなければ個別株として通過
+            pass
         return False
 
     def scan_pattern_b_candidates(self):
