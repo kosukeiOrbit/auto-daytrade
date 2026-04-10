@@ -273,6 +273,48 @@ def main():
         logger.info("=" * 60)
         return
 
+    # STEP 2.5: 前日急騰・暴落除外フィルタ（API呼び出し前に除外してコスト削減）
+    logger.info("\n" + "=" * 60)
+    logger.info("STEP 2.5: 前日急騰・暴落除外フィルタ")
+    logger.info("=" * 60)
+
+    filtered_codes = []
+
+    for idx, row in candidates.iterrows():
+        code = str(row['Code'])
+
+        try:
+            start_date = target_date - timedelta(days=7)
+            df_prices = jquants.get_daily_quotes(code=code, date=start_date)
+
+            if df_prices is not None and len(df_prices) >= 2:
+                df_prices['Date'] = pd.to_datetime(df_prices['Date'])
+                df_prices = df_prices.sort_values('Date', ascending=False)
+                df_prices = df_prices[df_prices['Date'] < target_date.strftime('%Y-%m-%d')]
+
+                if len(df_prices) >= 2:
+                    prev_close_1 = df_prices.iloc[0]['C']
+                    prev_close_2 = df_prices.iloc[1]['C']
+
+                    if pd.notna(prev_close_1) and pd.notna(prev_close_2) and prev_close_2 > 0:
+                        prev_day_change_pct = ((prev_close_1 - prev_close_2) / prev_close_2) * 100
+
+                        if prev_day_change_pct >= 25.0:
+                            logger.info(f"  {code}: 前日ストップ高除外 ({prev_day_change_pct:.1f}% >= 25%)")
+                            filtered_codes.append(code)
+                        if prev_day_change_pct <= -10.0:
+                            logger.info(f"  {code}: 前日暴落除外 ({prev_day_change_pct:.1f}% <= -10%)")
+                            filtered_codes.append(code)
+
+        except Exception as e:
+            logger.debug(f"{code}: 前日データ取得エラー: {e}")
+
+    if len(filtered_codes) > 0:
+        candidates = candidates[~candidates['Code'].astype(str).isin(filtered_codes)]
+        logger.info(f"前日急騰・暴落除外: {len(filtered_codes)}件除外 (残り{len(candidates)}件)")
+    else:
+        logger.info("前日急騰・暴落銘柄なし")
+
     # STEP 3: ニュース取得（株探スクレイピング）
     logger.info("\n" + "=" * 60)
     logger.info("STEP 3: ニュース・開示内容取得")
@@ -353,60 +395,6 @@ def main():
         logger.info(f"TOB・MBO銘柄を{len(tob_excluded)}件除外しました")
     else:
         logger.info("TOB・MBO銘柄なし")
-
-    # STEP 4.5: 前日急騰・暴落除外フィルタ
-    logger.info("\n" + "=" * 60)
-    logger.info("STEP 4.5: 前日急騰・暴落除外フィルタ")
-    logger.info("=" * 60)
-
-    filtered_codes = []
-
-    for idx, row in candidates.iterrows():
-        code = str(row['Code'])
-
-        # 前日ストップ高チェック
-        try:
-            # 過去7日分を取得して前日・前々日を抽出
-            start_date = target_date - timedelta(days=7)
-            df_prices = jquants.get_daily_quotes(code=code, date=start_date)
-
-            if df_prices is not None and len(df_prices) >= 2:
-                # 日付でソート（新しい順）
-                df_prices['Date'] = pd.to_datetime(df_prices['Date'])
-                df_prices = df_prices.sort_values('Date', ascending=False)
-
-                # target_dateより前のデータのみ抽出
-                df_prices = df_prices[df_prices['Date'] < target_date.strftime('%Y-%m-%d')]
-
-                # 前日と前々日の終値を取得
-                if len(df_prices) >= 2:
-                    prev_close_1 = df_prices.iloc[0]['C']  # 前日終値
-                    prev_close_2 = df_prices.iloc[1]['C']  # 前々日終値
-
-                    if pd.notna(prev_close_1) and pd.notna(prev_close_2) and prev_close_2 > 0:
-                        # 前日の上昇率を計算
-                        prev_day_change_pct = ((prev_close_1 - prev_close_2) / prev_close_2) * 100
-
-                        # +25%以上ならストップ高と判定
-                        if prev_day_change_pct >= 25.0:
-                            logger.info(f"  {code}: 前日ストップ高除外 ({prev_day_change_pct:.1f}% >= 25%)")
-                            filtered_codes.append(code)
-                        # -10%以下なら暴落と判定
-                        if prev_day_change_pct <= -10.0:
-                            logger.info(f"  {code}: 前日暴落除外 ({prev_day_change_pct:.1f}% <= -10%)")
-                            filtered_codes.append(code)
-
-        except Exception as e:
-            logger.debug(f"{code}: 前日データ取得エラー: {e}")
-            # エラー時はフィルタしない（保守的）
-
-    # フィルタ適用
-    if len(filtered_codes) > 0:
-        before_count = len(candidates)
-        candidates = candidates[~candidates['Code'].astype(str).isin(filtered_codes)]
-        logger.info(f"前日ストップ高除外: {len(filtered_codes)}件除外 (残り{len(candidates)}件)")
-    else:
-        logger.info("前日ストップ高銘柄なし")
 
     # STEP 5: 最終候補リスト出力
     logger.info("\n" + "=" * 60)

@@ -149,7 +149,7 @@ class Screener:
 
     def get_volume_surge_candidates(
         self,
-        surge_threshold=2.0,
+        surge_threshold=1.5,
         lookback_days=20,
         date=None
     ):
@@ -157,7 +157,7 @@ class Screener:
         出来高急増銘柄をスクリーニング（新設計）
 
         Args:
-            surge_threshold: 出来高急増倍率（デフォルト2.0 = 20日平均の2倍以上）
+            surge_threshold: 出来高急増倍率（デフォルト1.5 = 20日平均の1.5倍以上）
             lookback_days: 平均出来高計算期間（デフォルト20日）
             date: 対象日（datetimeオブジェクト）。Noneの場合は最新
 
@@ -292,6 +292,17 @@ class Screener:
 
         if len(df_filtered) == 0:
             logger.warning("売買代金フィルタ後、候補銘柄がなくなりました")
+            return pd.DataFrame()
+
+        # 3.6. 売買代金フィルタ（当日5億円以上・板薄銘柄の除外）
+        logger.info(f"\n[3.6/7] 売買代金フィルタ（当日5億円以上）...")
+        before_count = len(df_filtered)
+        df_filtered = df_filtered[df_filtered['TradingValue'] >= 500_000_000].copy()
+        excluded_count = before_count - len(df_filtered)
+        logger.info(f"  除外: {excluded_count}件（売買代金5億未満）, 残存: {len(df_filtered)}件")
+
+        if len(df_filtered) == 0:
+            logger.warning("売買代金5億フィルタ後、候補銘柄がなくなりました")
             return pd.DataFrame()
 
         # 4. 4桁コードフィルタ（ETF等の5桁コードを除外）
