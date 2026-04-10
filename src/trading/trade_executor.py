@@ -659,8 +659,24 @@ class TradeExecutor:
                         None
                     )
                     if matched:
-                        actual_entry_price = matched.get('exec_price') or matched.get('price')
-                        logger.success(f"{symbol}: 約定確認OK（約定価格={actual_entry_price}円）")
+                        # get_orders()のexec_priceは指値価格を返すケースがあるため
+                        # get_positions()から実際の約定価格を取得する
+                        try:
+                            positions = self.kabu_client.get_positions()
+                            filled_pos = next(
+                                (p for p in positions
+                                 if p['symbol'] == symbol and (p.get('qty') or 0) > 0),
+                                None
+                            )
+                            if filled_pos and filled_pos.get('price') and filled_pos['price'] > 0:
+                                actual_entry_price = filled_pos['price']
+                                logger.success(f"{symbol}: 約定確認OK（実約定価格={actual_entry_price}円 / 注文価格={matched.get('exec_price') or matched.get('price')}円）")
+                            else:
+                                actual_entry_price = matched.get('exec_price') or matched.get('price')
+                                logger.warning(f"{symbol}: get_positions()取得失敗、注文価格を使用（{actual_entry_price}円）")
+                        except Exception as e:
+                            actual_entry_price = matched.get('exec_price') or matched.get('price')
+                            logger.warning(f"{symbol}: get_positions()エラー、注文価格を使用（{actual_entry_price}円）: {e}")
                         break
                 except Exception as e:
                     logger.warning(f"{symbol}: get_orders失敗: {e}")
