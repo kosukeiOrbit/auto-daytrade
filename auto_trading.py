@@ -177,10 +177,9 @@ def trading_loop(executor, notifier=None):
                 if notifier:
                     notifier.send_error(f"⚠️ 大引け前決済失敗: {e}\nポジションを手動確認してください")
 
-        # パターンB: 場中動意銘柄エントリー（9:30〜15:25、フラグ有効時のみ）
-        # TODO: 本番安定後は10:30に戻す
-        if PATTERN_B_ENABLED and 9 <= current_hour <= 15:
-            in_pattern_b_window = (current_hour == 9 and current_minute >= 30) or (10 <= current_hour <= 14) or (current_hour == 15 and current_minute <= 25)
+        # パターンB: 場中動意銘柄エントリー（9:30〜10:30、フラグ有効時のみ）
+        if PATTERN_B_ENABLED and 9 <= current_hour <= 10:
+            in_pattern_b_window = (current_hour == 9 and current_minute >= 30) or (current_hour == 10 and current_minute <= 30)
             pattern_b_count = sum(1 for v in executor.active_positions.values() if v.get('entry_pattern') == 'B')
             total_count = len(executor.active_positions)
             if in_pattern_b_window and total_count < executor.max_positions_total and pattern_b_count < executor.max_positions_b:
