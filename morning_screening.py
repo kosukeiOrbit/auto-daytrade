@@ -116,7 +116,7 @@ def main():
 
     screener = Screener(budget=filter_budget)
     volume_candidates = screener.get_volume_surge_candidates(
-        surge_threshold=2.0,  # 20日平均の2倍以上
+        surge_threshold=1.5,  # 20日平均の1.5倍以上
         lookback_days=20,
         date=target_date  # 前営業日のデータを使用
     )
