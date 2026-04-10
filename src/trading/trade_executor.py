@@ -539,6 +539,19 @@ class TradeExecutor:
             logger.info("TOB・MBO除外後の候補銘柄がありません")
             return
 
+        # 売買代金フィルター（5億円以上のみ・板薄銘柄のスリッページ防止）
+        MIN_TRADING_VALUE = 500_000_000  # 5億円
+        if 'TradingValue' in candidates_df.columns:
+            before_count = len(candidates_df)
+            candidates_df = candidates_df[candidates_df['TradingValue'] >= MIN_TRADING_VALUE]
+            removed = before_count - len(candidates_df)
+            if removed > 0:
+                logger.info(f"売買代金フィルター（5億円未満）: {removed}銘柄を除外 → 残り{len(candidates_df)}銘柄")
+            if len(candidates_df) == 0:
+                logger.warning("売買代金フィルター後の候補がありません → 本日エントリーなし")
+                self.notifier.send_message("⚠️ パターンA: 売買代金5億円以上の候補なし → 本日エントリースキップ")
+                return
+
         # 優先順位でソート
         # 1. material_strength: '強' > '中'
         # 2. 同一強度内では TradingValue（売買代金絶対値）降順
