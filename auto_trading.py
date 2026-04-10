@@ -177,9 +177,10 @@ def trading_loop(executor, notifier=None):
                 if notifier:
                     notifier.send_error(f"⚠️ 大引け前決済失敗: {e}\nポジションを手動確認してください")
 
-        # パターンB: 場中動意銘柄エントリー（9:30〜10:30、フラグ有効時のみ）
-        if PATTERN_B_ENABLED and 9 <= current_hour <= 10:
-            in_pattern_b_window = (current_hour == 9 and current_minute >= 30) or (current_hour == 10 and current_minute <= 30)
+        # パターンB: 場中動意銘柄エントリー（9:30〜15:25、フラグ有効時のみ）
+        # TODO: 本番安定後は10:30に戻す
+        if PATTERN_B_ENABLED and 9 <= current_hour <= 15:
+            in_pattern_b_window = (current_hour == 9 and current_minute >= 30) or (10 <= current_hour <= 14) or (current_hour == 15 and current_minute <= 25)
             pattern_b_count = sum(1 for v in executor.active_positions.values() if v.get('entry_pattern') == 'B')
             total_count = len(executor.active_positions)
             if in_pattern_b_window and total_count < executor.max_positions_total and pattern_b_count < executor.max_positions_b:
@@ -277,11 +278,11 @@ def main():
 
     try:
         # TradeExecutor初期化
-        # 最大損失率3%、最大連敗3回
+        # 最大損失率10%、最大連敗10回
         executor = TradeExecutor(
             budget=budget,
-            max_daily_loss_rate=0.03,
-            max_consecutive_losses=3
+            max_daily_loss_rate=0.1,
+            max_consecutive_losses=10
         )
     except Exception as e:
         error_msg = f"TradeExecutor初期化エラー: {e}"
