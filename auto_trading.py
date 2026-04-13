@@ -337,18 +337,22 @@ def main():
         logger.info("日次レポート生成")
         logger.info("=" * 60)
 
-        # 終了時の信用余力を取得（opening_walletと同じソース）
+        # 終了時の余力を取得
         closing_wallet = None
+        closing_cash = None
         try:
             client = KabuClient()
-            wallet = client.get_wallet_margin()
-            closing_wallet = wallet.get('margin_account_wallet')
+            wallet_margin = client.get_wallet_margin()
+            closing_wallet = wallet_margin.get('margin_account_wallet')
+            wallet_cash = client.get_wallet_cash()
+            closing_cash = wallet_cash.get('stock_account_wallet')
         except Exception as e:
-            logger.warning(f"終了時信用余力取得失敗: {e}")
+            logger.warning(f"終了時余力取得失敗: {e}")
 
         report = executor.generate_daily_report(
             opening_wallet=opening_wallet,
-            closing_wallet=closing_wallet
+            closing_wallet=closing_wallet,
+            closing_cash=closing_cash
         )
 
         # JSON保存

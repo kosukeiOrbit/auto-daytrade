@@ -216,13 +216,18 @@ class DiscordNotifier:
         content = f"📊 **本日のトレードレポート（{formatted_date}）**\n"
         content += "━━━━━━━━━━━━━━━━━━\n"
 
-        # 買付余力
+        # 信用余力
         opening = report.get('opening_wallet')
         closing = report.get('closing_wallet')
         if opening is not None and closing is not None:
             diff = report.get('wallet_diff', 0) or 0
             diff_sign = "+" if diff >= 0 else ""
-            content += f"💳 買付余力：{opening:,.0f}円 → {closing:,.0f}円（{diff_sign}{diff:,.0f}円）\n"
+            content += f"💳 信用余力：{opening:,.0f}円 → {closing:,.0f}円（{diff_sign}{diff:,.0f}円）\n"
+
+        # 現金余力
+        closing_cash = report.get('closing_cash')
+        if closing_cash is not None:
+            content += f"💰 現金余力：{closing_cash:,.0f}円\n"
 
         trade_count = report.get('trade_count', 0)
 
