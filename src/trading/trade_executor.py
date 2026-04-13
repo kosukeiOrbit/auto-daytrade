@@ -1066,7 +1066,7 @@ class TradeExecutor:
         except Exception as e:
             logger.error(f"トレード履歴保存エラー: {e}")
 
-    def generate_daily_report(self, opening_wallet=None, closing_wallet=None, closing_cash=None, take_profit_pct=2.0, stop_loss_pct=1.0):
+    def generate_daily_report(self, opening_wallet=None, closing_wallet=None, opening_cash=None, closing_cash=None, take_profit_pct=2.0, stop_loss_pct=1.0):
         """
         本日のトレード結果を集計してレポートを生成
 
@@ -1135,6 +1135,7 @@ class TradeExecutor:
             'total_pnl': round(total_pnl, 1),
             'opening_wallet': opening_wallet,
             'closing_wallet': closing_wallet,
+            'opening_cash': opening_cash,
             'closing_cash': closing_cash,
             'wallet_diff': wallet_diff,
             'take_profit_pct': take_profit_pct,

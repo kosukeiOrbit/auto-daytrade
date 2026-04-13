@@ -225,8 +225,13 @@ class DiscordNotifier:
             content += f"💳 信用余力：{opening:,.0f}円 → {closing:,.0f}円（{diff_sign}{diff:,.0f}円）\n"
 
         # 現金余力
+        opening_cash = report.get('opening_cash')
         closing_cash = report.get('closing_cash')
-        if closing_cash is not None:
+        if opening_cash is not None and closing_cash is not None:
+            cash_diff = closing_cash - opening_cash
+            cash_sign = "+" if cash_diff >= 0 else ""
+            content += f"💰 現金余力：{opening_cash:,.0f}円 → {closing_cash:,.0f}円（{cash_sign}{cash_diff:,.0f}円）\n"
+        elif closing_cash is not None:
             content += f"💰 現金余力：{closing_cash:,.0f}円\n"
 
         trade_count = report.get('trade_count', 0)

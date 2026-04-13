@@ -267,8 +267,15 @@ def main():
         available_cash = None
         logger.warning(f"信用余力取得エラー、固定予算を使用: {e}")
 
-    # 開場時の信用余力を保存（日次レポート用）
+    # 開場時の余力を保存（日次レポート用）
     opening_wallet = available_cash
+    opening_cash = None
+    try:
+        wallet_cash = client.get_wallet_cash()
+        opening_cash = wallet_cash.get('stock_account_wallet')
+        logger.info(f"現金余力: {opening_cash:,.0f}円")
+    except Exception:
+        pass
 
     # STEP 4: TradeExecutor初期化
     logger.info("=" * 60)
@@ -352,6 +359,7 @@ def main():
         report = executor.generate_daily_report(
             opening_wallet=opening_wallet,
             closing_wallet=closing_wallet,
+            opening_cash=opening_cash,
             closing_cash=closing_cash
         )
 
