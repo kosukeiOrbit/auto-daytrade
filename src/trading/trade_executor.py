@@ -1253,10 +1253,14 @@ class TradeExecutor:
                     logger.info(f"{symbol}: 利確条件到達（現在値{cp} >= 目標{target_price}）→ 成行売り")
                     qty = pos_info.get('qty')
                     try:
-                        self.kabu_client.send_order(
+                        result = self.kabu_client.send_order(
                             symbol=symbol, exchange=9, side=1, qty=qty,
                             order_type=1, price=0
                         )
+                        if result.get('result_code') != 0:
+                            logger.error(f"{symbol}: 利確注文失敗（result_code={result.get('result_code')}）→ 監視継続")
+                            self.notifier.send_error(f"⚠️ {symbol}: 利確注文失敗（ストップ高等）！監視継続中")
+                            continue
                         # OCO補完：逆指値注文があればキャンセル
                         stop_order_id = pos_info.get('stop_order_id')
                         if stop_order_id:
@@ -1283,10 +1287,14 @@ class TradeExecutor:
                     logger.info(f"{symbol}: 損切り条件到達（現在値{cp} <= 損切{stop_price}）→ 成行売り")
                     qty = pos_info.get('qty')
                     try:
-                        self.kabu_client.send_order(
+                        result = self.kabu_client.send_order(
                             symbol=symbol, exchange=9, side=1, qty=qty,
                             order_type=1, price=0
                         )
+                        if result.get('result_code') != 0:
+                            logger.error(f"{symbol}: 損切注文失敗（result_code={result.get('result_code')}）→ 監視継続")
+                            self.notifier.send_error(f"⚠️ {symbol}: 損切注文失敗（ストップ安等）！監視継続中")
+                            continue
                         entry_price = pos_info.get('entry_price', 0)
                         profit_loss = (cp - entry_price) * qty if entry_price else 0
                         self.save_trade_history(symbol, entry_price, cp, qty, '損切り')
