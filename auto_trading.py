@@ -339,7 +339,10 @@ def main():
         logger.error(error_msg)
         notifier.send_error(f"⚠️ {error_msg}\nポジションを手動確認してください")
 
-    # STEP 7: 日次レポート生成・Discord通知
+    # STEP 7: 日次レポート生成・Discord通知（5分待機して余力反映を待つ）
+    logger.info("日次レポート送信まで5分待機（決済の余力反映を待つ）...")
+    time.sleep(300)
+
     try:
         logger.info("=" * 60)
         logger.info("日次レポート生成")
