@@ -336,6 +336,17 @@ class TradeExecutor:
                 limit_price = int(current_price * 1.01)
                 logger.info(f"{symbol}: エントリー注文 {qty}株 @ 指値{limit_price}円（現在値{current_price}+1%・パターンB）")
 
+            # 注文前のpositionsスナップショット（同銘柄の既存建玉価格を記録）
+            try:
+                pre_positions = self.kabu_client.get_positions()
+                pre_position_prices = set(
+                    (p['symbol'], p.get('price', 0))
+                    for p in pre_positions
+                    if p['symbol'] == symbol and (p.get('qty') or 0) > 0
+                )
+            except Exception:
+                pre_position_prices = set()
+
             entry_result = self.kabu_client.send_order(
                 symbol=symbol,
                 exchange=exchange,
@@ -370,6 +381,7 @@ class TradeExecutor:
             for _ in range(max_tries):
                 time.sleep(5)
                 try:
+                    # get_orders()で約定有無を確認
                     orders = self.kabu_client.get_orders(symbol=symbol)
                     matched = next(
                         (o for o in orders
@@ -379,24 +391,28 @@ class TradeExecutor:
                         None
                     )
                     if matched:
-                        actual_entry_price = matched.get('exec_price') or matched.get('price')
-                        logger.success(f"{symbol}: 約定確認OK（注文ID={entry_order_id} 約定価格={actual_entry_price}円 数量={matched.get('cum_qty')}株）")
+                        # positions差分で新規建玉の実約定価格を特定
+                        try:
+                            post_positions = self.kabu_client.get_positions()
+                            new_positions = [
+                                p for p in post_positions
+                                if p['symbol'] == symbol
+                                and (p.get('qty') or 0) > 0
+                                and (p['symbol'], p.get('price', 0)) not in pre_position_prices
+                            ]
+                            if new_positions:
+                                actual_entry_price = new_positions[0].get('price')
+                                logger.success(f"{symbol}: 約定確認OK（positions差分 実約定価格={actual_entry_price}円）")
+                            else:
+                                # 差分が取れない場合はexec_priceを使用
+                                actual_entry_price = matched.get('exec_price') or matched.get('price')
+                                logger.warning(f"{symbol}: positions差分なし、exec_price使用（{actual_entry_price}円）")
+                        except Exception as e:
+                            actual_entry_price = matched.get('exec_price') or matched.get('price')
+                            logger.warning(f"{symbol}: positions取得エラー、exec_price使用（{actual_entry_price}円）: {e}")
                         break
                 except Exception as e:
-                    logger.warning(f"{symbol}: 約定確認エラー（get_orders失敗）: {e}")
-                    # フォールバック：get_positions()で確認
-                    try:
-                        positions = self.kabu_client.get_positions()
-                        filled_pos = next(
-                            (p for p in positions if p['symbol'] == symbol and (p.get('qty') or 0) > 0),
-                            None
-                        )
-                        if filled_pos:
-                            actual_entry_price = filled_pos.get('price')
-                            logger.success(f"{symbol}: 約定確認OK（フォールバック 約定価格={actual_entry_price}円）")
-                            break
-                    except Exception as e2:
-                        logger.warning(f"{symbol}: フォールバック確認エラー: {e2}")
+                    logger.warning(f"{symbol}: get_orders失敗: {e}")
 
             if actual_entry_price is None:
                 logger.warning(f"{symbol}: 約定タイムアウト → 注文キャンセル")
