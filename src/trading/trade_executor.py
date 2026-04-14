@@ -365,7 +365,7 @@ class TradeExecutor:
             # 約定確認（パターンA: 寄り付き待機+最大1分, パターンB: 最大30秒）
             if entry_pattern == 'A':
                 now = datetime.now()
-                market_open = now.replace(hour=9, minute=0, second=30, microsecond=0)
+                market_open = now.replace(hour=9, minute=0, second=5, microsecond=0)
                 wait_seconds = (market_open - now).total_seconds()
                 if wait_seconds > 0:
                     logger.info(f"{symbol}: 寄り付き待機 {wait_seconds:.0f}秒")
@@ -658,7 +658,7 @@ class TradeExecutor:
 
         # ====== フェーズ2: 寄り付き待機 ======
         now = datetime.now()
-        market_open = now.replace(hour=9, minute=0, second=30, microsecond=0)
+        market_open = now.replace(hour=9, minute=0, second=5, microsecond=0)
         wait_seconds = (market_open - now).total_seconds()
         if wait_seconds > 0:
             logger.info(f"寄り付き待機 {wait_seconds:.0f}秒（{len(pending_orders)}銘柄の注文済み）")
