@@ -267,12 +267,11 @@ class TradeExecutor:
             available = wallet['margin_account_wallet']
 
             if available is None:
-                usable_budget = self.budget
-                logger.warning("信用余力取得失敗、固定予算を使用")
+                usable_budget = self.max_entry_amount
+                logger.warning("信用余力取得失敗、max_entry_amountを使用")
             else:
-                # 1銘柄あたりの上限：信用余力÷最大ポジション数 と max_entry_amount の小さい方
-                per_position = available / self.max_positions_total
-                usable_budget = min(per_position, self.max_entry_amount, self.budget)
+                # 1銘柄あたりの上限：max_entry_amount と信用余力の小さい方
+                usable_budget = min(self.max_entry_amount, available)
                 logger.info(f"信用余力: {available:,.0f}円 → 1銘柄予算: {usable_budget:,.0f}円")
 
         except Exception as e:
