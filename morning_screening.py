@@ -299,8 +299,8 @@ def main():
                     if pd.notna(prev_close_1) and pd.notna(prev_close_2) and prev_close_2 > 0:
                         prev_day_change_pct = ((prev_close_1 - prev_close_2) / prev_close_2) * 100
 
-                        if prev_day_change_pct >= 25.0:
-                            logger.info(f"  {code}: 前日ストップ高除外 ({prev_day_change_pct:.1f}% >= 25%)")
+                        if prev_day_change_pct >= 10.0:
+                            logger.info(f"  {code}: 前日急騰除外 ({prev_day_change_pct:.1f}% >= 10%)")
                             filtered_codes.append(code)
                         if prev_day_change_pct <= -10.0:
                             logger.info(f"  {code}: 前日暴落除外 ({prev_day_change_pct:.1f}% <= -10%)")

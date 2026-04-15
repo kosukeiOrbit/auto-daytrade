@@ -139,14 +139,14 @@ class TradeExecutor:
 
     def is_previous_day_limit_up(self, code, trade_date):
         """
-        前日がストップ高だったか判定
+        前日が急騰（+10%以上）だったか判定
 
         Args:
             code: 銘柄コード
             trade_date: 取引日（datetime）
 
         Returns:
-            bool: True=前日ストップ高（除外すべき）
+            bool: True=前日急騰（除外すべき）
         """
         try:
             # 過去7日分を取得して前日・前々日を抽出
@@ -172,9 +172,9 @@ class TradeExecutor:
                     # 前日の上昇率を計算
                     prev_day_change_pct = ((prev_close_1 - prev_close_2) / prev_close_2) * 100
 
-                    # +25%以上ならストップ高と判定
-                    if prev_day_change_pct >= 25.0:
-                        logger.debug(f"{code}: 前日ストップ高検出 (+{prev_day_change_pct:.1f}%)")
+                    # +10%以上なら前日急騰と判定
+                    if prev_day_change_pct >= 10.0:
+                        logger.debug(f"{code}: 前日急騰検出 (+{prev_day_change_pct:.1f}%)")
                         return True
 
             return False
