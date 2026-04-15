@@ -1274,6 +1274,9 @@ class TradeExecutor:
                         del self.active_positions[symbol]
                         logger.info(f"{symbol}: 利確決済完了 {entry_price}円→{cp}円（{profit_loss:+,.0f}円）")
                         self.notifier.send_message(f"✅ {symbol}: 利確決済 {entry_price}円→{cp}円（{profit_loss:+,.0f}円）")
+                        # 利確後も当日中の再エントリーを禁止
+                        self.entry_blacklist.add(symbol)
+                        logger.info(f"{symbol}: 利確後ブラックリスト追加（当日中再エントリー禁止）")
                         break
                     except Exception as e:
                         logger.error(f"{symbol}: 利確成行売り失敗: {e}")
@@ -1300,6 +1303,9 @@ class TradeExecutor:
                         del self.active_positions[symbol]
                         logger.info(f"{symbol}: 損切り決済完了 {entry_price}円→{cp}円（{profit_loss:+,.0f}円）")
                         self.notifier.send_message(f"✂️ {symbol}: 損切り決済 {entry_price}円→{cp}円（{profit_loss:+,.0f}円）")
+                        # 損切り後は当日中の再エントリーを禁止
+                        self.entry_blacklist.add(symbol)
+                        logger.info(f"{symbol}: 損切り後ブラックリスト追加（当日中再エントリー禁止）")
                         break
                     except Exception as e:
                         logger.error(f"{symbol}: 損切り成行売り失敗: {e}")
