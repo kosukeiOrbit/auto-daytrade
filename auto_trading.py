@@ -21,6 +21,9 @@
 5. 11:30 前場引け含み損決済
 6. 15:20 大引け前全ポジション決済
 7. 15:30に自動終了
+
+変更履歴:
+2026-04-17 パターンB優先候補の条件を「強・中のみ」→「材料あり全銘柄（強中弱）」に変更・株価200円未満フィルター追加（材料強度より流動性を重視）
 """
 import os
 import sys
@@ -317,11 +320,14 @@ def main():
         try:
             import pandas as pd
             df_cand = pd.read_csv(csv_path, encoding='utf-8-sig')
-            if 'material_strength' in df_cand.columns:
-                df_cand = df_cand[df_cand['material_strength'].isin(['強', '中'])]
-            # 売買代金5億円以上のみ（板薄・低位株を除外）
+            # 材料あり銘柄のみ（強・中・弱すべて対象）
+            if 'has_material' in df_cand.columns:
+                df_cand = df_cand[df_cand['has_material'] == True]
+            # 売買代金5億円以上・株価200円以上（板薄・低位株を除外）
             if 'TradingValue' in df_cand.columns:
                 df_cand = df_cand[df_cand['TradingValue'] >= 500_000_000]
+            if 'C' in df_cand.columns:
+                df_cand = df_cand[df_cand['C'] >= 200]
             candidate_symbols = df_cand['Code'].astype(str).str[:4].tolist()
             executor.pattern_b_candidate_symbols = candidate_symbols
             if candidate_symbols:

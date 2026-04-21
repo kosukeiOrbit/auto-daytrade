@@ -1,5 +1,8 @@
 """
 銘柄スクリーニング機能
+
+変更履歴:
+2026-04-17 最低株価200円未満フィルター追加（2134北浜CP34円がスクリーニング通過した事例を受けて対応・Claude APIコスト削減も兼ねる）
 """
 import pandas as pd
 from datetime import datetime, timedelta
@@ -292,6 +295,17 @@ class Screener:
 
         if len(df_filtered) == 0:
             logger.warning("売買代金フィルタ後、候補銘柄がなくなりました")
+            return pd.DataFrame()
+
+        # 3.5b. 最低株価フィルタ（200円未満を除外）
+        logger.info(f"\n[3.5b/7] 最低株価フィルタ（200円以上）...")
+        before_count = len(df_filtered)
+        df_filtered = df_filtered[df_filtered['C'] >= 200].copy()
+        excluded_count = before_count - len(df_filtered)
+        logger.info(f"  除外: {excluded_count}件（200円未満）, 残存: {len(df_filtered)}件")
+
+        if len(df_filtered) == 0:
+            logger.warning("株価フィルタ後、候補銘柄がなくなりました")
             return pd.DataFrame()
 
         # 3.6. 売買代金フィルタ（当日5億円以上・板薄銘柄の除外）
