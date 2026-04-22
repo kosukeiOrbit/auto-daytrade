@@ -56,6 +56,7 @@ class TradeExecutor:
         self.take_profit_pct_b = 1.5   # パターンB利確
         self.stop_loss_pct = 1.0       # 損切り（共通）
         self.max_gap_pct = 2.0         # 気配値GAP上限（これ超えたら発注スキップ）
+        self.min_gap_pct = -0.5        # 気配値GAP下限（これ未満はGDスキップ）
 
         # トレード状態管理
         self.daily_profit_loss = 0.0  # 日次損益（決済のたびに更新）
@@ -692,8 +693,8 @@ class TradeExecutor:
                         pre_gap_pct = (mid_price - base_close) / base_close * 100
                         logger.info(f"{symbol}: 気配値GAP = {pre_gap_pct:+.1f}% (Bid={bid_price} Ask={ask_price} 前日終値={base_close})")
 
-                        if pre_gap_pct < 0:
-                            logger.info(f"{symbol}: 気配GD（{pre_gap_pct:+.1f}%）→ 発注スキップ")
+                        if pre_gap_pct < self.min_gap_pct:
+                            logger.info(f"{symbol}: 気配GD（{pre_gap_pct:+.1f}% < {self.min_gap_pct}%）→ 発注スキップ")
                             self.entry_blacklist.add(symbol)
                             continue
                         if pre_gap_pct > self.max_gap_pct:
