@@ -3,6 +3,9 @@
 candidates_YYYYMMDD.csv を読み込み、エントリー判定・注文実行
 
 変更履歴:
+2026-04-22 フェーズ1に気配値GAPチェック追加（GD・GAP2%超は発注スキップ）
+           4/22検証で8:47気配値が始値と誤差0円で一致、過去成績でGD全敗・GAP2%+全敗の分析に基づく
+           execute_daily_tradingにも逆指値発注を追加（entry_with_stop_and_targetのみだった漏れを修正）
 2026-04-21 逆指値API注文を復活（エントリー後に逆指値発注→失敗時はmonitor_positions監視型にフォールバック）
            3秒ポーリングの遅延による-1%設定なのに-2%で損切りされる問題の解消
 2026-04-20 決済時の損益計算を判断時の現在値→実約定価格（get_orders exec_price）に修正
@@ -47,6 +50,12 @@ class TradeExecutor:
         self.max_positions_b = 3       # パターンB最大保有数
         self.max_positions_total = 3   # 合計最大保有数
         self.max_entry_amount = 500_000  # 1銘柄あたりの投資上限（50万円）
+
+        # 利確・損切り設定（%）
+        self.take_profit_pct_a = 2.0   # パターンA利確
+        self.take_profit_pct_b = 1.5   # パターンB利確
+        self.stop_loss_pct = 1.0       # 損切り（共通）
+        self.max_gap_pct = 2.0         # 気配値GAP上限（これ超えたら発注スキップ）
 
         # トレード状態管理
         self.daily_profit_loss = 0.0  # 日次損益（決済のたびに更新）
@@ -446,21 +455,15 @@ class TradeExecutor:
             # 逆指値はAPI非対応（SOR+信用で「即座に発動」エラー多発）のため
             # 損切り・利確ともmonitor_positions()の監視型で実行
             stop_price = min(
-                int(round(actual_entry_price * 0.99)),
+                int(round(actual_entry_price * (1 - self.stop_loss_pct / 100))),
                 int(actual_entry_price) - 1
             )
-            if entry_pattern == 'A':
-                target_price = max(
-                    int(round(actual_entry_price * 1.02)),
-                    int(actual_entry_price) + 1
-                )
-                target_pct = '+2.0%'
-            else:
-                target_price = max(
-                    int(round(actual_entry_price * 1.015)),
-                    int(actual_entry_price) + 1
-                )
-                target_pct = '+1.5%'
+            tp_pct = self.take_profit_pct_a if entry_pattern == 'A' else self.take_profit_pct_b
+            target_price = max(
+                int(round(actual_entry_price * (1 + tp_pct / 100))),
+                int(actual_entry_price) + 1
+            )
+            target_pct = f'+{tp_pct}%'
 
             # 逆指値注文を発注（損切り）
             stop_order_id = None
@@ -676,6 +679,28 @@ class TradeExecutor:
                     self.entry_blacklist.add(symbol)
                     continue
 
+                # 気配値GAPチェック（寄り付き前のGD・過大ギャップアップを除外）
+                prev_close = row.get('C', 0)
+                bid_price = symbol_info.get('bid_price') or 0
+                ask_price = symbol_info.get('ask_price') or 0
+                previous_close_api = symbol_info.get('previous_close') or 0
+
+                if bid_price > 0 and ask_price > 0:
+                    mid_price = (bid_price + ask_price) / 2
+                    base_close = prev_close if prev_close > 0 else previous_close_api
+                    if base_close > 0:
+                        pre_gap_pct = (mid_price - base_close) / base_close * 100
+                        logger.info(f"{symbol}: 気配値GAP = {pre_gap_pct:+.1f}% (Bid={bid_price} Ask={ask_price} 前日終値={base_close})")
+
+                        if pre_gap_pct < 0:
+                            logger.info(f"{symbol}: 気配GD（{pre_gap_pct:+.1f}%）→ 発注スキップ")
+                            self.entry_blacklist.add(symbol)
+                            continue
+                        if pre_gap_pct > self.max_gap_pct:
+                            logger.info(f"{symbol}: 気配GAP過大（{pre_gap_pct:+.1f}% > {self.max_gap_pct}%）→ 発注スキップ")
+                            self.entry_blacklist.add(symbol)
+                            continue
+
                 qty = self.calculate_position_size(current_price)
                 if qty == 0:
                     continue
@@ -772,11 +797,11 @@ class TradeExecutor:
 
             # 損切り・利確を約定価格基準で設定
             stop_price = min(
-                int(round(actual_entry_price * 0.99)),
+                int(round(actual_entry_price * (1 - self.stop_loss_pct / 100))),
                 int(actual_entry_price) - 1
             )
             target_price = max(
-                int(round(actual_entry_price * 1.02)),
+                int(round(actual_entry_price * (1 + self.take_profit_pct_a / 100))),
                 int(actual_entry_price) + 1
             )
 
@@ -786,9 +811,29 @@ class TradeExecutor:
             entry_vwap_ratio = ((actual_entry_price / entry_vwap) - 1) * 100 if entry_vwap and entry_vwap > 0 else None
             entry_gap_pct = ((actual_entry_price / entry_opening) - 1) * 100 if entry_opening and entry_opening > 0 else None
 
+            # 逆指値注文を発注（損切り）
+            stop_order_id = None
+            try:
+                stop_result = self.kabu_client.send_order(
+                    symbol=symbol,
+                    exchange=9,
+                    side=1,       # 売
+                    qty=qty,
+                    order_type=3, # 逆指値
+                    price=0,
+                    stop_price=stop_price
+                )
+                if stop_result.get('result_code') == 0:
+                    stop_order_id = stop_result.get('order_id')
+                    logger.info(f"{symbol}: 逆指値注文成功 損切={stop_price}円 order_id={stop_order_id}")
+                else:
+                    logger.warning(f"{symbol}: 逆指値注文失敗（result_code={stop_result.get('result_code')}）→ 監視型にフォールバック")
+            except Exception as e:
+                logger.warning(f"{symbol}: 逆指値注文エラー → 監視型にフォールバック: {e}")
+
             position_info = {
                 'entry_order_id': entry_order_id,
-                'stop_order_id': None,
+                'stop_order_id': stop_order_id,
                 'target_order_id': None,
                 'entry_price': actual_entry_price,
                 'qty': qty,
@@ -822,7 +867,7 @@ class TradeExecutor:
                 target_price=target_price
             )
 
-            logger.success(f"{symbol}: エントリー完了 {qty}株@{actual_entry_price}円 損切={stop_price} 利確={target_price}（監視型3秒）")
+            logger.success(f"{symbol}: エントリー完了 {qty}株@{actual_entry_price}円 損切={stop_price} 利確={target_price}（逆指値{'成功' if stop_order_id else '失敗→監視型'}）")
             entry_count += 1
 
         logger.info("=" * 60)
@@ -928,16 +973,25 @@ class TradeExecutor:
         try:
             positions = self.kabu_client.get_positions()
 
+            # 分割約定で同一銘柄が複数行返るため、銘柄ごとに集約
+            aggregated = {}
             for pos in positions:
                 symbol = pos['symbol']
                 qty = pos.get('qty') or 0
                 if qty <= 0:
-                    continue  # 0株（決済済み残骸）はスキップ
-                profit_loss = pos.get('profit_loss') or 0
+                    continue
+                if symbol not in aggregated:
+                    aggregated[symbol] = {'qty': 0, 'current_price': pos.get('current_price'), 'price': pos.get('price'), 'profit_loss': 0}
+                aggregated[symbol]['qty'] += qty
+                aggregated[symbol]['profit_loss'] += pos.get('profit_loss') or 0
+
+            for symbol, agg in aggregated.items():
+                qty = agg['qty']
+                profit_loss = agg['profit_loss']
 
                 # 含み損の場合のみ決済
                 if profit_loss < 0:
-                    logger.warning(f"{symbol}: 含み損 {profit_loss:,.0f}円 → 前場引け強制決済")
+                    logger.warning(f"{symbol}: 含み損 {profit_loss:,.0f}円 ({qty}株) → 前場引け強制決済")
 
                     # 既存の逆指値・利確指値をキャンセル
                     pos_info = self.active_positions.get(symbol, {})
@@ -959,12 +1013,8 @@ class TradeExecutor:
                         self.notifier.send_error(f"⚠️ {symbol}: 前場強制決済失敗！手動確認を推奨")
                         continue
 
-                    # トレード履歴保存
-                    # 分割約定で active_positions に未追跡のポジション（2件目以降）の場合、
-                    # entry_price=0 で保存されて巨額の偽利益が記録される問題を回避するため、
-                    # active_positions に無ければ kabu の平均約定価格 pos['price'] を使う
-                    exit_price = self._wait_for_exit_fill(result.get('order_id'), symbol, pos['current_price'])
-                    entry_price = pos_info.get('entry_price') or pos.get('price') or 0
+                    exit_price = self._wait_for_exit_fill(result.get('order_id'), symbol, agg['current_price'])
+                    entry_price = pos_info.get('entry_price') or agg.get('price') or 0
                     if entry_price == 0:
                         logger.warning(f"{symbol}: entry_price取得失敗のためtrade_history保存をスキップ")
                     else:
@@ -979,7 +1029,7 @@ class TradeExecutor:
                     self.notifier.send_trade_notification(
                         action="前場引け強制決済",
                         symbol=symbol,
-                        price=pos['current_price'],
+                        price=agg['current_price'],
                         qty=qty
                     )
 
@@ -1010,14 +1060,23 @@ class TradeExecutor:
                 logger.info("決済対象ポジションなし")
                 return
 
+            # 分割約定で同一銘柄が複数行返るため、銘柄ごとに集約
+            aggregated = {}
             for pos in positions:
                 symbol = pos['symbol']
                 qty = pos.get('qty') or 0
                 if qty <= 0:
-                    continue  # 0株（決済済み残骸）はスキップ
-                profit_loss = pos.get('profit_loss') or 0
+                    continue
+                if symbol not in aggregated:
+                    aggregated[symbol] = {'qty': 0, 'current_price': pos.get('current_price'), 'price': pos.get('price'), 'profit_loss': 0}
+                aggregated[symbol]['qty'] += qty
+                aggregated[symbol]['profit_loss'] += pos.get('profit_loss') or 0
 
-                logger.info(f"{symbol}: 損益={profit_loss:,.0f}円 → 大引け前強制決済")
+            for symbol, agg in aggregated.items():
+                qty = agg['qty']
+                profit_loss = agg['profit_loss']
+
+                logger.info(f"{symbol}: 損益={profit_loss:,.0f}円 ({qty}株) → 大引け前強制決済")
 
                 # 既存の逆指値・利確指値をキャンセル
                 pos_info = self.active_positions.get(symbol, {})
@@ -1043,8 +1102,8 @@ class TradeExecutor:
                 # 分割約定で active_positions に未追跡のポジション（2件目以降）の場合、
                 # entry_price=0 で保存されて巨額の偽利益が記録される問題を回避するため、
                 # active_positions に無ければ kabu の平均約定価格 pos['price'] を使う
-                exit_price = self._wait_for_exit_fill(result.get('order_id'), symbol, pos['current_price'])
-                entry_price = pos_info.get('entry_price') or pos.get('price') or 0
+                exit_price = self._wait_for_exit_fill(result.get('order_id'), symbol, agg['current_price'])
+                entry_price = pos_info.get('entry_price') or agg.get('price') or 0
                 exit_reason = '大引強制'
                 if entry_price == 0:
                     logger.warning(f"{symbol}: entry_price取得失敗のためtrade_history保存をスキップ")
@@ -1060,14 +1119,14 @@ class TradeExecutor:
                 self.notifier.send_trade_notification(
                     action="大引け前強制決済",
                     symbol=symbol,
-                    price=pos['current_price'],
+                    price=agg['current_price'],
                     qty=qty
                 )
 
                 logger.success(f"{symbol}: 大引け前強制決済完了")
 
             # 完了通知
-            self.notifier.send_message(f"大引け前強制決済完了: {len(positions)}銘柄")
+            self.notifier.send_message(f"大引け前強制決済完了: {len(aggregated)}銘柄")
 
         except Exception as e:
             logger.error(f"大引け前強制決済エラー: {e}")
@@ -1169,7 +1228,7 @@ class TradeExecutor:
         except Exception as e:
             logger.error(f"トレード履歴保存エラー: {e}")
 
-    def generate_daily_report(self, opening_wallet=None, closing_wallet=None, opening_cash=None, closing_cash=None, take_profit_pct=2.0, stop_loss_pct=1.0):
+    def generate_daily_report(self, opening_wallet=None, closing_wallet=None, opening_cash=None, closing_cash=None, take_profit_pct=None, stop_loss_pct=None):
         """
         本日のトレード結果を集計してレポートを生成
 
@@ -1241,8 +1300,8 @@ class TradeExecutor:
             'opening_cash': opening_cash,
             'closing_cash': closing_cash,
             'wallet_diff': wallet_diff,
-            'take_profit_pct': take_profit_pct,
-            'stop_loss_pct': stop_loss_pct,
+            'take_profit_pct': take_profit_pct if take_profit_pct is not None else self.take_profit_pct_a,
+            'stop_loss_pct': stop_loss_pct if stop_loss_pct is not None else self.stop_loss_pct,
             'trades': trades,
         }
 
@@ -1305,6 +1364,8 @@ class TradeExecutor:
                             f"✂️ {symbol}: 損切り決済 {entry_price}円→{exit_price}円（{pnl:+,.0f}円 / {pnl_pct:+.1f}%）"
                         )
                         del self.active_positions[symbol]
+                        self.entry_blacklist.add(symbol)
+                        logger.info(f"{symbol}: 逆指値決済後ブラックリスト追加（当日中再エントリー禁止）")
                     continue
                 active_symbols.add(symbol)
                 profit_loss = pos.get('profit_loss') or 0

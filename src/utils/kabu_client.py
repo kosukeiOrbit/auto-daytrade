@@ -202,6 +202,7 @@ class KabuClient:
                     'vwap': board_data.get('VWAP'),
                     'opening_price': board_data.get('OpeningPrice'),
                     'ask_qty': board_data.get('AskQty'),
+                    'previous_close': board_data.get('PreviousClose'),
                     'upper_limit': board_data.get('UpperLimit'),
                     'lower_limit': board_data.get('LowerLimit'),
                     'market_cap_value': board_data.get('MarketCapValue')
