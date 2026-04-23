@@ -73,12 +73,12 @@ def update_dry_run(date_str=None):
             target_price = virtual_entry * (1 + TAKE_PROFIT_PCT / 100)
             stop_price = virtual_entry * (1 - STOP_LOSS_PCT / 100)
 
-            if high_price >= target_price:
-                exit_price = round(target_price, 1)
-                exit_reason = '利確'
-            elif low_price <= stop_price:
+            if low_price <= stop_price:
                 exit_price = round(stop_price, 1)
                 exit_reason = '損切り'
+            elif high_price >= target_price:
+                exit_price = round(target_price, 1)
+                exit_reason = '利確'
             else:
                 exit_price = close_price
                 exit_reason = '引け決済'
