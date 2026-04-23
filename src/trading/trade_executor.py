@@ -1402,6 +1402,14 @@ class TradeExecutor:
                     logger.info(f"{symbol}: 利確条件到達（現在値{cp} >= 目標{target_price}）→ 成行売り")
                     qty = pos_info.get('qty')
                     try:
+                        # 逆指値注文があれば先にキャンセル（建玉ロック解除）
+                        stop_order_id = pos_info.get('stop_order_id')
+                        if stop_order_id:
+                            try:
+                                self.kabu_client.cancel_order(stop_order_id)
+                                logger.info(f"{symbol}: 逆指値注文キャンセル完了（利確前OCO）")
+                            except Exception as e:
+                                logger.warning(f"{symbol}: 逆指値キャンセル失敗（手動確認推奨）: {e}")
                         result = self.kabu_client.send_order(
                             symbol=symbol, exchange=9, side=1, qty=qty,
                             order_type=1, price=0
@@ -1410,14 +1418,6 @@ class TradeExecutor:
                             logger.error(f"{symbol}: 利確注文失敗（result_code={result.get('result_code')}）→ 監視継続")
                             self.notifier.send_error(f"⚠️ {symbol}: 利確注文失敗（ストップ高等）！監視継続中")
                             continue
-                        # OCO補完：逆指値注文があればキャンセル
-                        stop_order_id = pos_info.get('stop_order_id')
-                        if stop_order_id:
-                            try:
-                                self.kabu_client.cancel_order(stop_order_id)
-                                logger.info(f"{symbol}: 逆指値注文キャンセル完了（OCO）")
-                            except Exception as e:
-                                logger.warning(f"{symbol}: 逆指値キャンセル失敗（手動確認推奨）: {e}")
                         exit_price = self._wait_for_exit_fill(result.get('order_id'), symbol, cp)
                         entry_price = pos_info.get('entry_price', 0)
                         profit_loss = (exit_price - entry_price) * qty if entry_price else 0
