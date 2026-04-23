@@ -3,6 +3,10 @@
 candidates_YYYYMMDD.csv を読み込み、エントリー判定・注文実行
 
 変更履歴:
+2026-04-23 パターンBエントリー条件強化：①VWAP乖離1%以内（天井掴み防止）
+           ②5本上昇カウント→モメンタム判定（5本前比+0.3%以上）に変更
+           4028石原産業でVWAP乖離+1.05%の天井エントリー事例を受けて対応
+           利確時の逆指値キャンセルを成行売りの前に移動（建玉ロック1009001エラー修正）
 2026-04-22 フェーズ1に気配値GAPチェック追加（GD・GAP2%超は発注スキップ）
            4/22検証で8:47気配値が始値と誤差0円で一致、過去成績でGD全敗・GAP2%+全敗の分析に基づく
            execute_daily_tradingにも逆指値発注を追加（entry_with_stop_and_targetのみだった漏れを修正）
@@ -69,6 +73,7 @@ class TradeExecutor:
         self.pattern_b_last_volume = {}    # {symbol: 前回の累積出来高}（差分計算用）
         self.entry_blacklist = set()       # エントリー失敗した銘柄（当日中は再挑戦しない）
         self.pattern_b_candidate_symbols = []  # candidates_*.csvから読み込んだ優先監視銘柄
+        self.pattern_b_static_cache = {}  # {symbol: {'is_etf': bool, 'market_cap_ok': bool}} 不変チェック結果キャッシュ
 
         # 財務データ（発行済株式数）をロード（時価総額フィルター用）
         self.issued_shares_dict = {}  # {code_4digit: issued_shares}
@@ -1620,31 +1625,43 @@ class TradeExecutor:
                     logger.info(f"パターンB除外（薄商い）: {symbol} 売買代金{turnover/10000:.0f}万円")
                     continue
 
+                # 静的チェック（ETF正式名・時価総額）はキャッシュして毎回のboard取得を省略
+                cached = self.pattern_b_static_cache.get(symbol)
+                if cached:
+                    if cached.get('is_etf'):
+                        continue
+                    if cached.get('market_cap_ok') is False:
+                        continue
+
                 # /board で詳細情報取得
                 try:
                     board = self.kabu_client.get_symbol(symbol)
                 except Exception as e:
                     logger.info(f"パターンB除外（board取得失敗）: {symbol} {e}")
-                    time.sleep(0.3)
                     continue
 
                 # board正式名でETF再チェック（短縮名で漏れたETFを捕捉）
-                full_name = board.get('symbol_name', '') or ''
-                if self._is_etf(symbol, full_name):
-                    logger.info(f"パターンB除外（ETF・正式名）: {symbol} {full_name}")
-                    time.sleep(0.3)
-                    continue
+                if not cached:
+                    full_name = board.get('symbol_name', '') or ''
+                    if self._is_etf(symbol, full_name):
+                        logger.info(f"パターンB除外（ETF・正式名）: {symbol} {full_name}")
+                        self.pattern_b_static_cache[symbol] = {'is_etf': True, 'market_cap_ok': False}
+                        continue
 
                 # 時価総額フィルター（50億円以上）
                 current_price_board = board.get('current_price') or 0
-                if self.issued_shares_dict and current_price_board > 0:
+                if not cached and self.issued_shares_dict and current_price_board > 0:
                     issued_shares = self.issued_shares_dict.get(symbol)
                     if issued_shares:
                         market_cap = current_price_board * issued_shares
                         if market_cap < 5_000_000_000:
                             logger.info(f"パターンB除外（時価総額不足）: {symbol} {market_cap/100_000_000:.0f}億円")
-                            time.sleep(0.3)
+                            self.pattern_b_static_cache[symbol] = {'is_etf': False, 'market_cap_ok': False}
                             continue
+
+                # 初回チェック通過 → キャッシュ
+                if not cached:
+                    self.pattern_b_static_cache[symbol] = {'is_etf': False, 'market_cap_ok': True}
 
                 # 寄りからの上昇率フィルター（+3%超えは除外・高値掴み防止）
                 current_price_board = board.get('current_price') or 0
@@ -1653,7 +1670,6 @@ class TradeExecutor:
                     change_from_open = (current_price_board - opening_price) / opening_price * 100
                     if change_from_open > 3.0:
                         logger.info(f"パターンB除外（高値）: {symbol} 寄りから+{change_from_open:.1f}%")
-                        time.sleep(0.3)
                         continue
 
                 # 板の厚さフィルター（AskQtyがエントリー予定株数の2倍未満は除外）
@@ -1662,7 +1678,6 @@ class TradeExecutor:
                     estimated_qty = max(100, int(self.max_entry_amount / current_price_board / 100) * 100)
                     if ask_qty < estimated_qty * 2:
                         logger.info(f"パターンB除外（板薄）: {symbol} AskQty={ask_qty:.0f}株 < 必要{estimated_qty * 2}株")
-                        time.sleep(0.3)
                         continue
 
                 # 全フィルタ通過 → 採用
@@ -1778,16 +1793,10 @@ class TradeExecutor:
         パターンBのエントリー条件をチェック
 
         条件:
-        1. 現在値がVWAPより上
+        1. 現在値がVWAPより上（かつVWAPから+1%以内）
         2. 現在値が寄り付き値から+3%以内
-        3. 直近5本の価格が上昇トレンド（終値切り上がり）
-        4. パターンAで既にポジションを持っていない
-
-        Args:
-            symbol: 銘柄コード
-
-        Returns:
-            bool: エントリー可能ならTrue
+        3. 直近5本でモメンタムあり（5本前比+0.3%以上）
+        4. 出来高急増（RapidTrade >= 100%）
         """
         # パターンB上限チェック
         pattern_b_count = sum(1 for v in self.active_positions.values() if v.get('entry_pattern') == 'B')
@@ -1815,14 +1824,20 @@ class TradeExecutor:
         if current_price is None or current_price <= 0:
             return False
 
-        # 条件1: 現在値がVWAPより上
+        # 条件1a: 現在値がVWAPより上
         if vwap is not None and vwap > 0:
             if current_price < vwap * 0.998:
                 logger.info(f"パターンB {symbol}: ❌VWAP割れ（現在値{current_price} < VWAP{vwap:.0f}×0.998）")
                 return False
 
+        # 条件1b: VWAPからの乖離が1%以内（天井追いかけ防止）
+        if vwap is not None and vwap > 0:
+            vwap_deviation_pct = (current_price - vwap) / vwap * 100
+            if vwap_deviation_pct > 1.0:
+                logger.info(f"パターンB {symbol}: ❌VWAP乖離過大（現在値がVWAPから+{vwap_deviation_pct:.1f}% > 1%）")
+                return False
+
         # 条件2: 現在値が寄り付き値から+3%以内
-        # /board の OpeningPrice を使用（取得できなければ履歴の最初の価格で代用）
         opening_price = latest.get('opening_price')
         if opening_price is None or opening_price <= 0:
             opening_price = history[0]['price']
@@ -1832,28 +1847,29 @@ class TradeExecutor:
                 logger.info(f"パターンB {symbol}: ❌高値掴み防止（寄りから+{change_from_open:.1f}%）")
                 return False
 
-        # 条件3: 直近5本が上昇トレンド（価格が切り上がっている）
+        # 条件3: 直近5本でモメンタムがある（5本前より現在値が+0.3%以上上昇）
         recent_5 = history[-5:]
         prices = [r['price'] for r in recent_5 if r['price'] is not None]
         if len(prices) < 5:
             logger.info(f"パターンB {symbol}: ❌履歴不足（{len(prices)}/5本）")
             return False
 
-        up_count = sum(1 for i in range(len(prices) - 1) if prices[i + 1] > prices[i])
-        is_uptrend = up_count >= 3  # 5本中3本以上
-        if not is_uptrend:
-            logger.info(f"パターンB {symbol}: ❌トレンドなし（直近5本で上昇{up_count}回）")
-            return False
+        oldest_price = prices[0]
+        latest_price = prices[-1]
+        if oldest_price and oldest_price > 0:
+            momentum_pct = (latest_price - oldest_price) / oldest_price * 100
+            if momentum_pct < 0.3:
+                logger.info(f"パターンB {symbol}: ❌モメンタム不足（5本で{momentum_pct:+.2f}% < +0.3%）")
+                return False
+            logger.info(f"パターンB {symbol}: モメンタム={momentum_pct:+.2f}%（5本）")
 
         # 条件4: 出来高急増（RapidTradePercentage優先、フォールバックで差分計算）
         latest_rapid = latest.get('rapid_trade_pct', 0)
         if latest_rapid > 0:
-            # ランキングAPIの値を使用（100% = 通常の2倍）
             if latest_rapid < 100:
                 logger.info(f"パターンB {symbol}: ❌出来高不足（RapidTrade={latest_rapid:.1f}%）")
                 return False
         else:
-            # フォールバック：自前の差分計算
             volumes = [r['volume'] for r in history if r.get('volume', 0) > 0]
             if len(volumes) >= 5:
                 avg_volume = sum(volumes[:-1]) / len(volumes[:-1])
@@ -1862,7 +1878,7 @@ class TradeExecutor:
                     logger.info(f"パターンB {symbol}: ❌出来高不足（差分: {latest_volume:.0f} < {avg_volume:.0f}×2）")
                     return False
 
-        logger.info(f"パターンB {symbol}: エントリー条件充足（価格{current_price}, VWAP{vwap}, 5本上昇, RapidTrade={latest_rapid:.0f}%）")
+        logger.info(f"パターンB {symbol}: エントリー条件充足（価格{current_price}, VWAP{vwap}, モメンタム, RapidTrade={latest_rapid:.0f}%）")
         return True
 
     def execute_pattern_b_entry(self, symbol):
