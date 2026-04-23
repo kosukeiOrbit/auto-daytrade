@@ -40,6 +40,11 @@ from src.utils.config import Config
 # True に変更するだけで有効化できる。本番実績を積んでから有効化すること。
 PATTERN_B_ENABLED = True
 
+# パターンAの動作モード
+# True  = 通常通りリアルエントリー
+# False = 仮想モード（注文せず情報収集のみ）
+PATTERN_A_REAL_ENTRY = False
+
 # ログファイル設定
 log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)
@@ -306,12 +311,17 @@ def main():
         logger.info("=" * 60)
 
         try:
-            executor.execute_daily_trading()
-            logger.success("エントリー実行完了")
+            if PATTERN_A_REAL_ENTRY:
+                executor.execute_daily_trading()
+                logger.success("パターンAエントリー実行完了")
+            else:
+                executor.execute_daily_trading_dry_run()
+                logger.success("パターンA仮想モード実行完了")
         except Exception as e:
             error_msg = f"エントリー実行エラー: {e}"
             logger.error(error_msg)
-            notifier.send_error(f"⚠️ {error_msg}\nポジションが残っている可能性があります。取引監視ループは継続します。")
+            if PATTERN_A_REAL_ENTRY:
+                notifier.send_error(f"⚠️ {error_msg}\nポジションが残っている可能性があります。取引監視ループは継続します。")
     else:
         logger.info("候補CSVなし → パターンAエントリーをスキップ")
 

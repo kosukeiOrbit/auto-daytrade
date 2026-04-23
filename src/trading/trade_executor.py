@@ -3,9 +3,10 @@
 candidates_YYYYMMDD.csv を読み込み、エントリー判定・注文実行
 
 変更履歴:
-2026-04-23 パターンBエントリー条件強化：①VWAP乖離1%以内（天井掴み防止）
+2026-04-23 パターンAを仮想モード（ドライラン）に切り替え。PATTERN_A_REAL_ENTRY=Falseで注文なし情報収集モード
+           気配値GAP・仮想損益をCSV+Discordに記録。update_dry_run.pyで引け後にOHLCV取得・仮想損益計算
+           パターンBエントリー条件強化：①VWAP乖離1%以内（天井掴み防止）
            ②5本上昇カウント→モメンタム判定（5本前比+0.3%以上）に変更
-           4028石原産業でVWAP乖離+1.05%の天井エントリー事例を受けて対応
            利確時の逆指値キャンセルを成行売りの前に移動（建玉ロック1009001エラー修正）
 2026-04-22 フェーズ1に気配値GAPチェック追加（GD・GAP2%超は発注スキップ）
            4/22検証で8:47気配値が始値と誤差0円で一致、過去成績でGD全敗・GAP2%+全敗の分析に基づく
@@ -883,6 +884,147 @@ class TradeExecutor:
         self.notifier.send_message(
             f"自動売買完了\nエントリー: {entry_count}銘柄\n候補: {len(candidates_df)}銘柄"
         )
+
+    def execute_daily_trading_dry_run(self):
+        """
+        パターンA 仮想モード（ドライラン）
+        注文は出さず、気配値・GAP・仮想損益を記録・Discord通知する
+        """
+        logger.info("=" * 60)
+        logger.info("パターンA 仮想モード（ドライラン）")
+        logger.info("=" * 60)
+
+        candidates_df = self.load_candidates()
+        if len(candidates_df) == 0:
+            logger.info("候補銘柄がありません")
+            return
+
+        trade_date = datetime.now()
+        candidates_df = self.apply_filters(candidates_df, trade_date)
+        if len(candidates_df) == 0:
+            logger.info("フィルタ後の候補銘柄がありません")
+            return
+
+        tob_keywords = ['TOB', 'MBO', '公開買付', '株式交換', '完全子会社化', '非公開化',
+                    '買収防衛', 'スクイーズアウト', '株式併合', '上場廃止']
+        if 'material_summary' in candidates_df.columns:
+            tob_mask = candidates_df['material_summary'].astype(str).apply(
+                lambda s: any(kw in s for kw in tob_keywords)
+            )
+            candidates_df = candidates_df[~tob_mask]
+
+        if len(candidates_df) == 0:
+            return
+
+        MIN_TRADING_VALUE = 500_000_000
+        if 'TradingValue' in candidates_df.columns:
+            candidates_df = candidates_df[candidates_df['TradingValue'] >= MIN_TRADING_VALUE]
+        if len(candidates_df) == 0:
+            self.notifier.send_message("📊 [仮想] パターンA: 売買代金5億円以上の候補なし")
+            return
+
+        strength_order = {'強': 0, '中': 1}
+        candidates_df['strength_rank'] = candidates_df['material_strength'].map(strength_order)
+        candidates_df = candidates_df.sort_values(by=['strength_rank', 'TradingValue'], ascending=[True, False])
+        candidates_df = candidates_df.drop(columns=['strength_rank'])
+
+        records = []
+        passed = []
+        excluded = []
+
+        for _, row in candidates_df.iterrows():
+            symbol = str(row['Code'])
+            prev_close = row.get('C', 0)
+
+            try:
+                self.kabu_client.unregister_all()
+                symbol_info = self.kabu_client.get_symbol(symbol, exchange=1)
+            except Exception:
+                excluded.append(f"{symbol}（board取得失敗）")
+                continue
+
+            bid_price = symbol_info.get('bid_price') or 0
+            ask_price = symbol_info.get('ask_price') or 0
+            current_price = symbol_info.get('ask_price') or symbol_info.get('current_price') or 0
+            previous_close_api = symbol_info.get('previous_close') or 0
+            full_name = symbol_info.get('symbol_name', '')
+
+            if current_price < 200:
+                excluded.append(f"{symbol}（低位株{current_price}円）")
+                continue
+
+            mid_price = (bid_price + ask_price) / 2 if bid_price > 0 and ask_price > 0 else current_price
+            base_close = prev_close if prev_close > 0 else previous_close_api
+
+            pre_gap_pct = (mid_price - base_close) / base_close * 100 if base_close > 0 and mid_price > 0 else 0
+
+            if pre_gap_pct < self.min_gap_pct:
+                gap_result = 'GD除外'
+                excluded.append(f"{symbol}（GD {pre_gap_pct:+.1f}%）")
+            elif pre_gap_pct > self.max_gap_pct:
+                gap_result = 'GAP過大除外'
+                excluded.append(f"{symbol}（GAP {pre_gap_pct:+.1f}%）")
+            else:
+                gap_result = '通過'
+
+            virtual_price = mid_price if mid_price > 0 else current_price
+            virtual_qty = (int(self.max_entry_amount / virtual_price / 100) * 100) if virtual_price > 0 else 0
+            if virtual_qty < 100:
+                virtual_qty = 100
+            virtual_budget = virtual_price * virtual_qty
+
+            record = {
+                'Date': trade_date.strftime('%Y%m%d'),
+                'Code': symbol,
+                'SymbolName': full_name,
+                'MaterialStrength': row.get('material_strength', ''),
+                'MaterialSummary': str(row.get('material_summary', ''))[:50],
+                'TradingValue': row.get('TradingValue', 0),
+                'VolumeSurgeRatio': row.get('VolumeSurgeRatio', 0),
+                'PreBidPrice': bid_price,
+                'PreAskPrice': ask_price,
+                'PreMidPrice': round(mid_price, 1),
+                'PrevClose': base_close,
+                'PreGapPct': round(pre_gap_pct, 2),
+                'GapFilterResult': gap_result,
+                'VirtualEntryPrice': round(virtual_price, 1),
+                'VirtualQty': virtual_qty,
+                'VirtualBudget': round(virtual_budget, 0),
+                'OpenPrice': '', 'HighPrice': '', 'LowPrice': '', 'ClosePrice': '',
+                'VirtualExitPrice': '', 'VirtualExitReason': '',
+                'VirtualPnL': '', 'VirtualPnLPct': '',
+                'VirtualHoldMinutes': '',
+            }
+            records.append(record)
+
+            if gap_result == '通過':
+                passed.append(record)
+
+        # CSV保存
+        if records:
+            import csv
+            csv_path = f"data/dry_run_{trade_date.strftime('%Y%m%d')}.csv"
+            os.makedirs("data", exist_ok=True)
+            fieldnames = list(records[0].keys())
+            with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(records)
+            logger.info(f"仮想モードCSV保存: {csv_path}（{len(records)}銘柄）")
+
+        # Discord通知
+        msg = f"📊 [仮想] パターンA候補 {len(passed)}銘柄\n\n"
+        for i, rec in enumerate(passed[:5], 1):
+            msg += (
+                f"{i}. {rec['Code']} {rec['SymbolName']} [{rec['MaterialStrength']}]\n"
+                f"　気配: {rec['VirtualEntryPrice']:,.0f}円（GAP {rec['PreGapPct']:+.1f}%）✅通過\n"
+                f"　仮想エントリー: {rec['VirtualEntryPrice']:,.0f}円 × {rec['VirtualQty']}株 = {rec['VirtualBudget']:,.0f}円\n\n"
+            )
+        if excluded:
+            msg += f"❌除外: {', '.join(excluded[:10])}\n"
+
+        self.notifier.send_message(msg)
+        logger.info(f"仮想モード完了: 通過{len(passed)}銘柄 除外{len(excluded)}銘柄")
 
     def _get_actual_exit_info(self, symbol, pos_info):
         """注文履歴から実際の約定価格と決済理由を取得（注文ID絞り込み付き）"""
