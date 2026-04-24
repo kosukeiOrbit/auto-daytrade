@@ -53,7 +53,7 @@ def update_dry_run(date_str=None):
         try:
             # J-Quants の日次データ取得
             # 当日分はAPIの反映タイミング次第（16:00以降推奨）
-            quotes = jquants.get_daily_quotes(code, date_str=f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}")
+            quotes = jquants.get_daily_quotes(code, date=f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}")
             if quotes is None or len(quotes) == 0:
                 logger.warning(f"{code}: 当日データ未取得（API未反映の可能性）")
                 continue
