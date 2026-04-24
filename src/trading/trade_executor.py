@@ -1164,17 +1164,18 @@ class TradeExecutor:
                         self.notifier.send_error(f"⚠️ {symbol}: 前場強制決済失敗！手動確認を推奨")
                         continue
 
-                    exit_price = self._wait_for_exit_fill(result.get('order_id'), symbol, agg['current_price'])
+                    # monitorスレッドの0株検知で二重記録されないよう、約定待ち前にactive_positionsから削除
                     entry_price = pos_info.get('entry_price') or agg.get('price') or 0
+                    if symbol in self.active_positions:
+                        del self.active_positions[symbol]
+                        logger.info(f"{symbol}: active_positionsから削除（前場強制決済完了）")
+                    self.entry_blacklist.add(symbol)
+
+                    exit_price = self._wait_for_exit_fill(result.get('order_id'), symbol, agg['current_price'])
                     if entry_price == 0:
                         logger.warning(f"{symbol}: entry_price取得失敗のためtrade_history保存をスキップ")
                     else:
                         self.save_trade_history(symbol, entry_price, exit_price, qty, '前場強制')
-
-                    # active_positionsから削除
-                    if symbol in self.active_positions:
-                        del self.active_positions[symbol]
-                        logger.info(f"{symbol}: active_positionsから削除（前場強制決済完了）")
 
                     # Discord通知
                     self.notifier.send_trade_notification(
@@ -1249,22 +1250,19 @@ class TradeExecutor:
                     self.notifier.send_error(f"⚠️ {symbol}: 大引強制決済失敗！手動確認を推奨")
                     continue
 
-                # トレード履歴保存
-                # 分割約定で active_positions に未追跡のポジション（2件目以降）の場合、
-                # entry_price=0 で保存されて巨額の偽利益が記録される問題を回避するため、
-                # active_positions に無ければ kabu の平均約定価格 pos['price'] を使う
-                exit_price = self._wait_for_exit_fill(result.get('order_id'), symbol, agg['current_price'])
+                # monitorスレッドの0株検知で二重記録されないよう、約定待ち前にactive_positionsから削除
                 entry_price = pos_info.get('entry_price') or agg.get('price') or 0
+                if symbol in self.active_positions:
+                    del self.active_positions[symbol]
+                    logger.info(f"{symbol}: active_positionsから削除（大引強制決済完了）")
+                self.entry_blacklist.add(symbol)
+
+                exit_price = self._wait_for_exit_fill(result.get('order_id'), symbol, agg['current_price'])
                 exit_reason = '大引強制'
                 if entry_price == 0:
                     logger.warning(f"{symbol}: entry_price取得失敗のためtrade_history保存をスキップ")
                 else:
                     self.save_trade_history(symbol, entry_price, exit_price, qty, exit_reason)
-
-                # active_positionsから削除
-                if symbol in self.active_positions:
-                    del self.active_positions[symbol]
-                    logger.info(f"{symbol}: active_positionsから削除（大引強制決済完了）")
 
                 # Discord通知
                 self.notifier.send_trade_notification(
