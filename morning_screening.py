@@ -255,23 +255,11 @@ def main():
     logger.info(f"地合い判定: {sentiment_message}")
 
     # 地合いによる候補絞り込み
+    # 地合い悪化でもスクリーニングは続行（パターンBで候補CSVを使用するため）
+    skip_pattern_a = False
     if market_status == 'skip_all':
-        logger.error("地合い悪化のため全スキップします")
-
-        # Discord通知（地合い悪化で終了）
-        notifier = DiscordNotifier()
-        notifier.send_morning_report(
-            candidates_df=pd.DataFrame(),
-            judgments={},
-            sentiment_message=sentiment_message,
-            tdnet_count=len(tdnet_codes),
-            budget=budget
-        )
-
-        logger.info("=" * 60)
-        logger.info("朝スクリーニング終了（地合い悪化）")
-        logger.info("=" * 60)
-        return
+        logger.warning("地合い悪化 → パターンAエントリーは非推奨だがスクリーニングは続行（パターンB用）")
+        skip_pattern_a = True
 
     # STEP 2.5: 前日急騰・暴落除外フィルタ（API呼び出し前に除外してコスト削減）
     logger.info("\n" + "=" * 60)
