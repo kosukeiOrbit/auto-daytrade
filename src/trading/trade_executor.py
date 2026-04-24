@@ -902,11 +902,18 @@ class TradeExecutor:
             logger.info("候補銘柄がありません")
             return
 
+        # 仮想モード: 材料強度フィルタなし（全候補を記録してサンプル数を最大化）
+        # 前日ストップ高フィルタのみ適用
         trade_date = datetime.now()
-        candidates_df = self.apply_filters(candidates_df, trade_date)
-        if len(candidates_df) == 0:
-            logger.info("フィルタ後の候補銘柄がありません")
-            return
+        if 'Code' in candidates_df.columns:
+            filtered_codes = []
+            for _, row in candidates_df.iterrows():
+                code = str(row['Code'])
+                if self.is_previous_day_limit_up(code, trade_date):
+                    filtered_codes.append(code)
+                    logger.info(f"仮想モード: 前日ストップ高除外: {code}")
+            if filtered_codes:
+                candidates_df = candidates_df[~candidates_df['Code'].astype(str).isin(filtered_codes)]
 
         tob_keywords = ['TOB', 'MBO', '公開買付', '株式交換', '完全子会社化', '非公開化',
                     '買収防衛', 'スクイーズアウト', '株式併合', '上場廃止']
@@ -926,8 +933,8 @@ class TradeExecutor:
             self.notifier.send_message("📊 [仮想] パターンA: 売買代金5億円以上の候補なし")
             return
 
-        strength_order = {'強': 0, '中': 1}
-        candidates_df['strength_rank'] = candidates_df['material_strength'].map(strength_order)
+        strength_order = {'強': 0, '中': 1, '弱': 2}
+        candidates_df['strength_rank'] = candidates_df['material_strength'].map(strength_order).fillna(3)
         candidates_df = candidates_df.sort_values(by=['strength_rank', 'TradingValue'], ascending=[True, False])
         candidates_df = candidates_df.drop(columns=['strength_rank'])
 
