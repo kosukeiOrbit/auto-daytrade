@@ -57,10 +57,10 @@ def update_dry_run(date_str=None):
                 continue
 
             row = quotes.iloc[-1]
-            open_price = row.get('Open', 0) or 0
-            high_price = row.get('High', 0) or 0
-            low_price = row.get('Low', 0) or 0
-            close_price = row.get('Close', 0) or 0
+            open_price = row.get('O', 0) or row.get('Open', 0) or 0
+            high_price = row.get('H', 0) or row.get('High', 0) or 0
+            low_price = row.get('L', 0) or row.get('Low', 0) or 0
+            close_price = row.get('C', 0) or row.get('Close', 0) or 0
 
             rec['OpenPrice'] = open_price
             rec['HighPrice'] = high_price
