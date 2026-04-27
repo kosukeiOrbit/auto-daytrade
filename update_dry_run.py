@@ -71,16 +71,23 @@ def update_dry_run(date_str=None):
             target_price = virtual_entry * (1 + TAKE_PROFIT_PCT / 100)
             stop_price = virtual_entry * (1 - STOP_LOSS_PCT / 100)
 
-            if low_price <= stop_price:
+            reached_sl = low_price <= stop_price
+            reached_tp = high_price >= target_price
+
+            if reached_sl and reached_tp:
+                exit_price = round(stop_price, 1)
+                exit_reason = '両方到達'
+            elif reached_sl:
                 exit_price = round(stop_price, 1)
                 exit_reason = '損切り'
-            elif high_price >= target_price:
+            elif reached_tp:
                 exit_price = round(target_price, 1)
                 exit_reason = '利確'
             else:
                 exit_price = close_price
                 exit_reason = '引け決済'
 
+            # 両方到達の場合はPnLを損切りベースで計算（保守的）
             pnl = (exit_price - virtual_entry) * virtual_qty
             pnl_pct = (exit_price / virtual_entry - 1) * 100 if virtual_entry > 0 else 0
 
@@ -133,15 +140,25 @@ def update_dry_run(date_str=None):
         pnl_pct = float(rec['VirtualPnLPct'])
         gap_filter = rec.get('GapFilterResult', '')
         gap_mark = '✅' if gap_filter == '通過' else '❌'
+        reason = rec['VirtualExitReason']
+        reason_mark = '△' if reason == '両方到達' else reason
         msg += (
             f"{i}. {rec['Code']} {rec['SymbolName']} [{gap_mark}]: "
-            f"{pnl_pct:+.1f}% {rec['VirtualExitReason']}（{pnl:+,.0f}円）\n"
+            f"{pnl_pct:+.1f}% {reason_mark}（{pnl:+,.0f}円）\n"
         )
     if len(completed) > 10:
-        msg += f"...他{len(completed)-10}銘柄\n"
+        both_count = sum(1 for r in completed if r.get('VirtualExitReason') == '両方到達')
+        msg += f"...他{len(completed)-10}銘柄"
+        if both_count > 0:
+            msg += f"（うち△両方到達{both_count}件）"
+        msg += "\n"
 
     if passed_only:
-        msg += f"\n✅通過のみ: {passed_pnl:+,.0f}円（{passed_wins}勝{passed_losses}敗）"
+        p_both = sum(1 for r in passed_only if r.get('VirtualExitReason') == '両方到達')
+        msg += f"\n✅通過のみ: {passed_pnl:+,.0f}円（{passed_wins}勝{passed_losses}敗"
+        if p_both > 0:
+            msg += f" △{p_both}件"
+        msg += "）"
     msg += f"\n全体合計: {total_pnl:+,.0f}円（{wins}勝{losses}敗 勝率{win_rate:.0f}%）"
     notifier.send_message(msg)
     logger.success("Discord通知完了")
