@@ -77,6 +77,7 @@ class TradeExecutor:
         self.pattern_b_source = {}        # {symbol: 'ranking'/'screening'/'both'} エントリーソース追跡
         self.entry_blacklist = set()       # エントリー失敗した銘柄（当日中は再挑戦しない）
         self.pattern_b_candidate_symbols = []  # candidates_*.csvから読み込んだ優先監視銘柄
+        self.pattern_b_candidate_info = {}    # {symbol: {'material_strength': str, 'material_type': str}}
         self.pattern_b_static_cache = {}  # {symbol: {'is_etf': bool, 'market_cap_ok': bool}} 不変チェック結果キャッシュ
 
         # 財務データ（発行済株式数）をロード（時価総額フィルター用）
@@ -514,8 +515,8 @@ class TradeExecutor:
                 'stop_price': stop_price,
                 'target_price': target_price,
                 'entry_time': datetime.now(),
-                'material_strength': '',
-                'material_type': '',
+                'material_strength': self.pattern_b_candidate_info.get(symbol, {}).get('material_strength', ''),
+                'material_type': self.pattern_b_candidate_info.get(symbol, {}).get('material_type', ''),
                 'volume_surge': 0.0,
                 'entry_pattern': entry_pattern,
                 'entry_source': self.pattern_b_source.get(symbol, '') if entry_pattern == 'B' else '',

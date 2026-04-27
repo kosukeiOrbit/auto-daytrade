@@ -345,6 +345,13 @@ def main():
                 df_cand = df_cand[df_cand['C'] >= 200]
             candidate_symbols = df_cand['Code'].astype(str).str[:4].tolist()
             executor.pattern_b_candidate_symbols = candidate_symbols
+            # 材料情報をキャッシュ（パターンBエントリー時にtrade_historyに記録するため）
+            for _, row in df_cand.iterrows():
+                code = str(row['Code'])[:4]
+                executor.pattern_b_candidate_info[code] = {
+                    'material_strength': row.get('material_strength', ''),
+                    'material_type': row.get('material_type', ''),
+                }
             if candidate_symbols:
                 logger.info(f"パターンB候補（材料銘柄）: {len(candidate_symbols)}銘柄 {candidate_symbols[:10]}")
         except Exception as e:
