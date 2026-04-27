@@ -96,21 +96,19 @@ def update_dry_run(date_str=None):
         except Exception as e:
             logger.warning(f"{code}: OHLCV取得失敗: {e}")
 
-    if not updated:
-        logger.info("更新対象なし")
-        return
+    if updated:
+        # CSV上書き保存
+        fieldnames = list(records[0].keys())
+        with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(records)
+        logger.info(f"CSV更新完了: {csv_path}")
 
-    # CSV上書き保存
-    fieldnames = list(records[0].keys())
-    with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(records)
-    logger.info(f"CSV更新完了: {csv_path}")
-
-    # Discord通知
+    # Discord通知（CSV更新済みでも通知再送）
     completed = [r for r in records if r.get('VirtualExitPrice')]
     if not completed:
+        logger.info("通知対象なし")
         return
 
     total_pnl = sum(float(r['VirtualPnL']) for r in completed)
