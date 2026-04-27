@@ -335,25 +335,27 @@ def main():
         try:
             import pandas as pd
             df_cand = pd.read_csv(csv_path, encoding='utf-8-sig')
-            # 材料あり銘柄のみ（強・中・弱すべて対象）
-            if 'has_material' in df_cand.columns:
-                df_cand = df_cand[df_cand['has_material'] == True]
-            # 売買代金5億円以上・株価200円以上（板薄・低位株を除外）
-            if 'TradingValue' in df_cand.columns:
-                df_cand = df_cand[df_cand['TradingValue'] >= 500_000_000]
-            if 'C' in df_cand.columns:
-                df_cand = df_cand[df_cand['C'] >= 200]
-            candidate_symbols = df_cand['Code'].astype(str).str[:4].tolist()
-            executor.pattern_b_candidate_symbols = candidate_symbols
-            # 材料情報をキャッシュ（パターンBエントリー時にtrade_historyに記録するため）
+            # CSV全銘柄のコードリスト（both判定用）と材料情報をキャッシュ
+            all_csv_codes = df_cand['Code'].astype(str).str[:4].tolist()
+            executor.pattern_b_csv_codes = set(all_csv_codes)
             for _, row in df_cand.iterrows():
                 code = str(row['Code'])[:4]
                 executor.pattern_b_candidate_info[code] = {
                     'material_strength': row.get('material_strength', ''),
                     'material_type': row.get('material_type', ''),
                 }
+            # 優先監視銘柄（材料あり＋売買代金5億以上＋株価200円以上）
+            if 'has_material' in df_cand.columns:
+                df_cand = df_cand[df_cand['has_material'] == True]
+            if 'TradingValue' in df_cand.columns:
+                df_cand = df_cand[df_cand['TradingValue'] >= 500_000_000]
+            if 'C' in df_cand.columns:
+                df_cand = df_cand[df_cand['C'] >= 200]
+            candidate_symbols = df_cand['Code'].astype(str).str[:4].tolist()
+            executor.pattern_b_candidate_symbols = candidate_symbols
             if candidate_symbols:
                 logger.info(f"パターンB候補（材料銘柄）: {len(candidate_symbols)}銘柄 {candidate_symbols[:10]}")
+            logger.info(f"パターンB CSV全銘柄: {len(all_csv_codes)}銘柄（both判定用）")
         except Exception as e:
             logger.warning(f"パターンB候補読み込み失敗: {e}")
 

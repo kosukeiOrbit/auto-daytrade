@@ -76,8 +76,9 @@ class TradeExecutor:
         self.pattern_b_last_volume = {}    # {symbol: 前回の累積出来高}（差分計算用）
         self.pattern_b_source = {}        # {symbol: 'ranking'/'screening'/'both'} エントリーソース追跡
         self.entry_blacklist = set()       # エントリー失敗した銘柄（当日中は再挑戦しない）
-        self.pattern_b_candidate_symbols = []  # candidates_*.csvから読み込んだ優先監視銘柄
+        self.pattern_b_candidate_symbols = []  # candidates_*.csvから読み込んだ優先監視銘柄（フィルタ通過分）
         self.pattern_b_candidate_info = {}    # {symbol: {'material_strength': str, 'material_type': str}}
+        self.pattern_b_csv_codes = set()      # candidates_*.csvの全銘柄コード（both判定用）
         self.pattern_b_static_cache = {}  # {symbol: {'is_etf': bool, 'market_cap_ok': bool}} 不変チェック結果キャッシュ
 
         # 財務データ（発行済株式数）をロード（時価総額フィルター用）
@@ -1838,7 +1839,7 @@ class TradeExecutor:
 
                 # 全フィルタ通過 → 採用
                 top_symbols.append(symbol)
-                if symbol in self.pattern_b_candidate_symbols:
+                if symbol in self.pattern_b_csv_codes:
                     self.pattern_b_source[symbol] = 'both'
                 else:
                     self.pattern_b_source[symbol] = 'ranking'
