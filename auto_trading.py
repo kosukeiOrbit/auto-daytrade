@@ -187,7 +187,12 @@ def trading_loop(executor, notifier=None):
 
         # パターンB: 場中動意銘柄エントリー（9:30〜14:00、フラグ有効時のみ）
         if PATTERN_B_ENABLED and 9 <= current_hour <= 14:
-            in_pattern_b_window = (current_hour == 9 and current_minute >= 30) or (10 <= current_hour <= 13) or (current_hour == 14 and current_minute == 0)
+            in_pattern_b_window = (
+                (current_hour == 9 and current_minute >= 30)
+                or (current_hour == 10 and current_minute <= 50)
+                or (12 <= current_hour <= 13)
+                or (current_hour == 14 and current_minute == 0)
+            )
             pattern_b_count = sum(1 for v in executor.active_positions.values() if v.get('entry_pattern') == 'B')
             total_count = len(executor.active_positions)
             if in_pattern_b_window and total_count < executor.max_positions_total and pattern_b_count < executor.max_positions_b:
