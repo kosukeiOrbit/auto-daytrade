@@ -74,6 +74,7 @@ class TradeExecutor:
         # パターンB: 銘柄ごとの直近価格履歴（5分足組み立て用）
         self.pattern_b_price_history = {}  # {symbol: [{'time': datetime, 'price': float, 'volume': int, 'vwap': float}]}
         self.pattern_b_last_volume = {}    # {symbol: 前回の累積出来高}（差分計算用）
+        self.pattern_b_source = {}        # {symbol: 'ranking'/'screening'/'both'} エントリーソース追跡
         self.entry_blacklist = set()       # エントリー失敗した銘柄（当日中は再挑戦しない）
         self.pattern_b_candidate_symbols = []  # candidates_*.csvから読み込んだ優先監視銘柄
         self.pattern_b_static_cache = {}  # {symbol: {'is_etf': bool, 'market_cap_ok': bool}} 不変チェック結果キャッシュ
@@ -517,6 +518,7 @@ class TradeExecutor:
                 'material_type': '',
                 'volume_surge': 0.0,
                 'entry_pattern': entry_pattern,
+                'entry_source': self.pattern_b_source.get(symbol, '') if entry_pattern == 'B' else '',
                 'mfe_pct': 0.0,
                 'mae_pct': 0.0,
                 'entry_vwap_ratio': round(entry_vwap_ratio, 4) if entry_vwap_ratio is not None else None,
@@ -536,7 +538,8 @@ class TradeExecutor:
                 target_price=target_price
             )
 
-            logger.success(f"{symbol}: エントリー完了 数量={qty}株 価格={current_price}円 損切={stop_price}円 利確={target_price}円")
+            source_label = f" source={position_info['entry_source']}" if position_info.get('entry_source') else ''
+            logger.success(f"{symbol}: エントリー完了 数量={qty}株 価格={current_price}円 損切={stop_price}円 利確={target_price}円{source_label}")
 
             return position_info
 
@@ -1322,6 +1325,7 @@ class TradeExecutor:
             entry_time_obj = pos_info.get('entry_time')
             entry_time_str = entry_time_obj.strftime('%H:%M') if entry_time_obj else ''
             entry_pattern = pos_info.get('entry_pattern', 'A')
+            entry_source = pos_info.get('entry_source', '')
 
             # 決済時刻・保有時間
             exit_time_now = datetime.now()
@@ -1358,6 +1362,7 @@ class TradeExecutor:
                 'entry_vwap_ratio': entry_vwap_ratio if entry_vwap_ratio is not None else '',
                 'entry_gap_pct': entry_gap_pct if entry_gap_pct is not None else '',
                 'opening_gap_pct': opening_gap_pct if opening_gap_pct is not None else '',
+                'entry_source': entry_source,
             }
 
             df_new = pd.DataFrame([record])
@@ -1832,6 +1837,10 @@ class TradeExecutor:
 
                 # 全フィルタ通過 → 採用
                 top_symbols.append(symbol)
+                if symbol in self.pattern_b_candidate_symbols:
+                    self.pattern_b_source[symbol] = 'both'
+                else:
+                    self.pattern_b_source[symbol] = 'ranking'
                 logger.info(
                     f"パターンB採用: {symbol} {board.get('symbol_name', '')} "
                     f"現在値={current_price_board}円 "
@@ -1880,6 +1889,8 @@ class TradeExecutor:
             priority_added = []
             for symbol in self.pattern_b_candidate_symbols:
                 if symbol in top_symbols:
+                    if self.pattern_b_source.get(symbol) == 'ranking':
+                        self.pattern_b_source[symbol] = 'both'
                     continue  # 既にランキング経由で追加済み
                 if len(top_symbols) + len(priority_added) >= 10:
                     break  # 最大10件
@@ -1916,6 +1927,7 @@ class TradeExecutor:
                     ]
 
                     priority_added.append(symbol)
+                    self.pattern_b_source[symbol] = 'screening'
                     logger.info(f"パターンB材料銘柄: {symbol} {board.get('symbol_name', '')} 現在値={current_price_board}円")
                     time.sleep(0.3)
                 except Exception as e:
