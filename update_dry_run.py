@@ -119,28 +119,31 @@ def update_dry_run(date_str=None):
     win_rate = wins / len(completed) * 100 if completed else 0
 
     formatted_date = f"{date_str[:4]}/{date_str[4:6]}/{date_str[6:]}"
+
+    # 通過銘柄のみの小計
+    passed_only = [r for r in completed if r.get('GapFilterResult') == '通過']
+    passed_pnl = sum(float(r['VirtualPnL']) for r in passed_only) if passed_only else 0
+    passed_wins = sum(1 for r in passed_only if float(r['VirtualPnL']) > 0)
+    passed_losses = len(passed_only) - passed_wins
+
+    # 通過銘柄の詳細（上位10件まで）
     msg = f"📊 [仮想結果] パターンA {len(completed)}銘柄（{formatted_date}）\n\n"
-    for i, rec in enumerate(completed, 1):
+    for i, rec in enumerate(completed[:10], 1):
         entry = float(rec['VirtualEntryPrice'])
         exit_p = float(rec['VirtualExitPrice'])
         pnl = float(rec['VirtualPnL'])
         pnl_pct = float(rec['VirtualPnLPct'])
         gap_filter = rec.get('GapFilterResult', '')
-        gap_mark = '✅' if gap_filter == '通過' else f'❌{gap_filter}'
+        gap_mark = '✅' if gap_filter == '通過' else '❌'
         msg += (
             f"{i}. {rec['Code']} {rec['SymbolName']} [{gap_mark}]: "
-            f"{entry:,.0f}円→{exit_p:,.0f}円 {pnl_pct:+.1f}% "
-            f"{rec['VirtualExitReason']}（仮想{pnl:+,.0f}円）\n"
+            f"{pnl_pct:+.1f}% {rec['VirtualExitReason']}（{pnl:+,.0f}円）\n"
         )
+    if len(completed) > 10:
+        msg += f"...他{len(completed)-10}銘柄\n"
 
-    # 通過銘柄のみの小計も表示
-    passed_only = [r for r in completed if r.get('GapFilterResult') == '通過']
-    if passed_only and len(passed_only) != len(completed):
-        passed_pnl = sum(float(r['VirtualPnL']) for r in passed_only)
-        passed_wins = sum(1 for r in passed_only if float(r['VirtualPnL']) > 0)
-        passed_losses = len(passed_only) - passed_wins
+    if passed_only:
         msg += f"\n✅通過のみ: {passed_pnl:+,.0f}円（{passed_wins}勝{passed_losses}敗）"
-
     msg += f"\n全体合計: {total_pnl:+,.0f}円（{wins}勝{losses}敗 勝率{win_rate:.0f}%）"
     notifier.send_message(msg)
     logger.success("Discord通知完了")
