@@ -388,6 +388,9 @@ class TradeExecutor:
             except Exception:
                 pre_position_prices = set()
 
+            # Board自動登録によるトリガリソース枯渇を防止
+            self.kabu_client.unregister_all()
+
             entry_result = self.kabu_client.send_order(
                 symbol=symbol,
                 exchange=exchange,
@@ -721,6 +724,7 @@ class TradeExecutor:
 
                 limit_price = int(current_price * 1.05)
                 logger.info(f"{symbol}: 注文発注 {qty}株 @ 指値{limit_price}円（前日終値{current_price}+5%）")
+                self.kabu_client.unregister_all()
                 entry_result = self.kabu_client.send_order(
                     symbol=symbol, exchange=9, side=2, qty=qty,
                     order_type=2, price=limit_price
