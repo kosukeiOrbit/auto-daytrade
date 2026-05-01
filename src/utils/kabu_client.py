@@ -329,6 +329,44 @@ class KabuClient:
             logger.error(f"注文発注エラー: {e}")
             raise
 
+    def get_margin_premium(self, symbol):
+        """
+        一般信用・デイトレ信用のプレミアム料情報を取得
+
+        Returns:
+            dict: {
+                'short_available_general': bool,  # 一般信用売建可否
+                'short_available_daytrade': bool, # デイトレ信用売建可否
+                'general_premium': float,         # 一般信用プレミアム料
+                'daytrade_premium': float,        # デイトレ信用プレミアム料（入札の場合は上限）
+                'daytrade_premium_type': int,     # 0=なし,1=固定,2=入札,None=不可
+            }
+        """
+        try:
+            url = f"{self.api_url}/margin/marginpremium/{symbol}"
+            response = self._api_request(requests.get, url)
+            if response.status_code != 200:
+                return {'short_available_general': False, 'short_available_daytrade': False,
+                        'general_premium': None, 'daytrade_premium': None, 'daytrade_premium_type': None}
+            data = response.json()
+            gm = data.get('GeneralMargin', {}) or {}
+            dt = data.get('DayTrade', {}) or {}
+            gm_type = gm.get('MarginPremiumType')
+            dt_type = dt.get('MarginPremiumType')
+            # 入札制(2)の場合は UpperMarginPremium を使う
+            dt_premium = dt.get('MarginPremium') if dt_type != 2 else dt.get('UpperMarginPremium')
+            return {
+                'short_available_general': gm_type is not None,
+                'short_available_daytrade': dt_type is not None,
+                'general_premium': gm.get('MarginPremium'),
+                'daytrade_premium': dt_premium,
+                'daytrade_premium_type': dt_type,
+            }
+        except Exception as e:
+            logger.debug(f"{symbol}: marginpremium取得失敗: {e}")
+            return {'short_available_general': False, 'short_available_daytrade': False,
+                    'general_premium': None, 'daytrade_premium': None, 'daytrade_premium_type': None}
+
     def cancel_order(self, order_id):
         """
         注文を取消

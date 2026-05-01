@@ -992,6 +992,9 @@ class TradeExecutor:
                 virtual_qty = 100
             virtual_budget = virtual_price * virtual_qty
 
+            # 一般信用・デイトレ信用の売建可否取得
+            margin_info = self.kabu_client.get_margin_premium(symbol)
+
             record = {
                 'Date': trade_date.strftime('%Y%m%d'),
                 'Code': symbol,
@@ -1017,6 +1020,12 @@ class TradeExecutor:
                 'ShortVirtualEntryPrice': round(virtual_price, 1),
                 'ShortVirtualExitPrice': '', 'ShortVirtualExitReason': '',
                 'ShortVirtualPnL': '', 'ShortVirtualPnLPct': '',
+                # 信用売建可否・プレミアム料
+                'ShortAvailableGeneral': margin_info['short_available_general'],
+                'ShortAvailableDayTrade': margin_info['short_available_daytrade'],
+                'GeneralPremium': margin_info['general_premium'] if margin_info['general_premium'] is not None else '',
+                'DayTradePremium': margin_info['daytrade_premium'] if margin_info['daytrade_premium'] is not None else '',
+                'DayTradePremiumType': margin_info['daytrade_premium_type'] if margin_info['daytrade_premium_type'] is not None else '',
             }
             records.append(record)
 
