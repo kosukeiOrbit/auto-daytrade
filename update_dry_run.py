@@ -69,6 +69,26 @@ def update_dry_run(date_str=None):
     except Exception as e:
         logger.warning(f"地合い取得失敗: {e}")
 
+    # OHLC一括取得（全銘柄1リクエスト・レート制限回避）
+    bulk_ohlc = {}
+    needs_ohlc = [r for r in records if r.get('OpenPrice') in ('', None, 0, '0')]
+    if needs_ohlc:
+        try:
+            trade_date = datetime.strptime(date_str, '%Y%m%d')
+            all_quotes = jquants.get_daily_quotes(date=trade_date)
+            if all_quotes is not None and len(all_quotes) > 0:
+                for _, q_row in all_quotes.iterrows():
+                    c = str(q_row.get('Code', ''))
+                    if len(c) == 5:
+                        c = c[:4]
+                    bulk_ohlc[c] = q_row
+                logger.info(f"J-Quants一括取得成功: {len(bulk_ohlc)}銘柄")
+            else:
+                logger.warning(f"一括取得失敗 → 個別取得にフォールバック")
+        except Exception as e:
+            logger.warning(f"一括取得失敗 → 個別取得にフォールバック: {e}")
+
+    import time as _time
     updated = False
 
     for rec in records:
@@ -82,14 +102,25 @@ def update_dry_run(date_str=None):
         virtual_qty = int(float(rec['VirtualQty']))
 
         try:
-            # OHLC取得（既存値を再利用 or 新規取得）
+            # OHLC取得（既存値 or 一括キャッシュ or 個別フォールバック）
             if rec.get('OpenPrice') not in ('', None, 0, '0'):
                 open_price = float(rec['OpenPrice'])
                 high_price = float(rec['HighPrice'])
                 low_price = float(rec['LowPrice'])
                 close_price = float(rec['ClosePrice'])
+            elif code in bulk_ohlc:
+                row = bulk_ohlc[code]
+                open_price = row.get('O', 0) or row.get('Open', 0) or 0
+                high_price = row.get('H', 0) or row.get('High', 0) or 0
+                low_price = row.get('L', 0) or row.get('Low', 0) or 0
+                close_price = row.get('C', 0) or row.get('Close', 0) or 0
+                rec['OpenPrice'] = open_price
+                rec['HighPrice'] = high_price
+                rec['LowPrice'] = low_price
+                rec['ClosePrice'] = close_price
             else:
                 trade_date = datetime.strptime(date_str, '%Y%m%d')
+                _time.sleep(0.5)  # レート制限対策
                 quotes = jquants.get_daily_quotes(code, date=trade_date)
                 if quotes is None or len(quotes) == 0:
                     logger.warning(f"{code}: 当日データ未取得（API未反映の可能性）")
@@ -200,13 +231,26 @@ def update_dry_run(date_str=None):
             logger.warning(f"{code}: OHLCV取得失敗: {e}")
 
     if updated:
-        # CSV上書き保存
-        fieldnames = list(records[0].keys())
+        # CSV上書き保存（全レコードのキーをマージしてから保存・新カラム対応）
+        all_keys = list(records[0].keys())
+        seen = set(all_keys)
+        for r in records[1:]:
+            for k in r.keys():
+                if k not in seen:
+                    all_keys.append(k); seen.add(k)
+        # 新カラム（DictReaderで読まれなかったがコード側で追加されたもの）も拾う
+        extra_keys = ['HighTime', 'LowTime', 'OpenTime', 'NikkeiChangePct', 'TopixChangePct',
+                      'ShortAvailableGeneral', 'ShortAvailableDayTrade',
+                      'GeneralPremium', 'DayTradePremium', 'DayTradePremiumType']
+        for k in extra_keys:
+            if k not in seen and any(k in r for r in records):
+                all_keys.append(k); seen.add(k)
+
         with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer = csv.DictWriter(f, fieldnames=all_keys, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(records)
-        logger.info(f"CSV更新完了: {csv_path}")
+        logger.info(f"CSV更新完了: {csv_path}（{len(all_keys)}列）")
 
     # Discord通知（CSV更新済みでも通知再送）
     completed = [r for r in records if r.get('VirtualExitPrice')]
