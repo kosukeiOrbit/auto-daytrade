@@ -1013,6 +1013,10 @@ class TradeExecutor:
                 'VirtualExitPrice': '', 'VirtualExitReason': '',
                 'VirtualPnL': '', 'VirtualPnLPct': '',
                 'VirtualHoldMinutes': '',
+                # ショート版（引け後にupdate_dry_run.pyで埋める）
+                'ShortVirtualEntryPrice': round(virtual_price, 1),
+                'ShortVirtualExitPrice': '', 'ShortVirtualExitReason': '',
+                'ShortVirtualPnL': '', 'ShortVirtualPnLPct': '',
             }
             records.append(record)
 

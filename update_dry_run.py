@@ -97,8 +97,37 @@ def update_dry_run(date_str=None):
             rec['VirtualPnLPct'] = round(pnl_pct, 2)
             rec['VirtualHoldMinutes'] = ''
 
+            # ショート版（ロングと逆: 利確=-2%, 損切り=+1%）
+            short_entry = virtual_entry  # 同じエントリー価格
+            short_tp = short_entry * (1 - TAKE_PROFIT_PCT / 100)  # 下に利確
+            short_sl = short_entry * (1 + STOP_LOSS_PCT / 100)    # 上に損切り
+            short_reached_tp = low_price <= short_tp
+            short_reached_sl = high_price >= short_sl
+
+            if short_reached_sl and short_reached_tp:
+                short_exit = round(short_sl, 1)
+                short_reason = '両方到達'
+            elif short_reached_sl:
+                short_exit = round(short_sl, 1)
+                short_reason = '損切り'
+            elif short_reached_tp:
+                short_exit = round(short_tp, 1)
+                short_reason = '利確'
+            else:
+                short_exit = close_price
+                short_reason = '引け決済'
+
+            # ショート損益: (entry - exit) * qty
+            short_pnl = (short_entry - short_exit) * virtual_qty
+            short_pnl_pct = (short_entry / short_exit - 1) * 100 if short_exit > 0 else 0
+
+            rec['ShortVirtualExitPrice'] = round(short_exit, 1)
+            rec['ShortVirtualExitReason'] = short_reason
+            rec['ShortVirtualPnL'] = round(short_pnl, 0)
+            rec['ShortVirtualPnLPct'] = round(short_pnl_pct, 2)
+
             updated = True
-            logger.info(f"{code}: {virtual_entry}→{exit_price} {exit_reason} pnl={pnl:+,.0f}")
+            logger.info(f"{code}: L:{exit_reason}{pnl:+,.0f} / S:{short_reason}{short_pnl:+,.0f}")
 
         except Exception as e:
             logger.warning(f"{code}: OHLCV取得失敗: {e}")
@@ -160,6 +189,32 @@ def update_dry_run(date_str=None):
             msg += f" △{p_both}件"
         msg += "）"
     msg += f"\n全体合計: {total_pnl:+,.0f}円（{wins}勝{losses}敗 勝率{win_rate:.0f}%）"
+
+    # ショート版集計
+    short_completed = [r for r in completed if r.get('ShortVirtualPnL') not in ('', None)]
+    if short_completed:
+        s_total = sum(float(r['ShortVirtualPnL']) for r in short_completed)
+        s_wins = sum(1 for r in short_completed if float(r['ShortVirtualPnL']) > 0)
+        s_losses = len(short_completed) - s_wins
+        s_both = sum(1 for r in short_completed if r.get('ShortVirtualExitReason') == '両方到達')
+
+        # GAP+0.5%以上の銘柄に絞ったショート（実戦想定）
+        short_target = [r for r in short_completed if r.get('PreGapPct') not in ('', None) and float(r['PreGapPct']) >= 0.5]
+        if short_target:
+            st_pnl = sum(float(r['ShortVirtualPnL']) for r in short_target)
+            st_wins = sum(1 for r in short_target if float(r['ShortVirtualPnL']) > 0)
+            st_losses = len(short_target) - st_wins
+            st_both = sum(1 for r in short_target if r.get('ShortVirtualExitReason') == '両方到達')
+
+        msg += f"\n\n🔻 [ショート仮想] {len(short_completed)}銘柄"
+        if short_target:
+            msg += f"\n  GAP≥+0.5%絞り: {st_pnl:+,.0f}円（{st_wins}勝{st_losses}敗"
+            if st_both > 0: msg += f" △{st_both}件"
+            msg += "）"
+        msg += f"\n  全体合計: {s_total:+,.0f}円（{s_wins}勝{s_losses}敗"
+        if s_both > 0: msg += f" △{s_both}件"
+        msg += "）"
+
     notifier.send_message(msg)
     logger.success("Discord通知完了")
 
