@@ -6,7 +6,7 @@ candidates_YYYYMMDD.csv を読み込み、エントリー判定・注文実行
 2026-05-02 ショート対応：entry_with_stop_and_targetにdirection引数追加（'long'/'short'）
            position_info/save_trade_historyにdirectionを記録、損益計算を反転対応
            monitor_positions・force_exit_*もposition.sideで自動判定して返済方向を決定
-           execute_pattern_b_short_entry()ヘルパー追加（売建可否チェック付き）
+           execute_pattern_a_short_entry()ヘルパー追加（売建可否チェック付き・寄り前GAP戦略）
            kabu_client.send_orderにis_new引数追加（新規/返済を明示指定可能に）
 2026-04-23 パターンAを仮想モード（ドライラン）に切り替え。PATTERN_A_REAL_ENTRY=Falseで注文なし情報収集モード
            気配値GAP・仮想損益をCSV+Discordに記録。update_dry_run.pyで引け後にOHLCV取得・仮想損益計算
@@ -2145,8 +2145,11 @@ class TradeExecutor:
         """パターンBのエントリーを実行（ロング・entry_with_stop_and_targetに委譲）"""
         return self.entry_with_stop_and_target(symbol, entry_pattern='B', direction='long')
 
-    def execute_pattern_b_short_entry(self, symbol):
-        """パターンBのショートエントリーを実行（entry_with_stop_and_targetに委譲）"""
+    def execute_pattern_a_short_entry(self, symbol):
+        """
+        パターンAのショートエントリー（寄り前GAP上昇銘柄を売建）
+        朝の気配値GAP +0.5%以上の銘柄が対象（呼び出し側でフィルタ）
+        """
         # 売建可否チェック（デイトレ信用）
         try:
             margin = self.kabu_client.get_margin_premium(symbol)
@@ -2157,4 +2160,4 @@ class TradeExecutor:
         except Exception as e:
             logger.warning(f"{symbol}: 売建可否確認失敗 → スキップ: {e}")
             return None
-        return self.entry_with_stop_and_target(symbol, entry_pattern='B', direction='short')
+        return self.entry_with_stop_and_target(symbol, entry_pattern='A', direction='short')
