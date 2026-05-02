@@ -3,6 +3,13 @@
 candidates_YYYYMMDD.csv を読み込み、エントリー判定・注文実行
 
 変更履歴:
+2026-05-02 ショート対応の漏れ修正（コードレビュー）：
+           ・_get_actual_exit_info: direction別の側面・利確/損切判定
+           ・_is_position_actually_closed: ショート決済side='2'（買）も検知
+           ・MFE/MAE: ショート時は符号反転（下落=MFE+、上昇=MAE-）
+           ・positions snapshot: side込みのキーで long/short 両建て対応
+           ・generate_daily_report: direction列を含める
+           ・notifier.send_daily_report: ロング/ショートを表示
 2026-05-02 ショート対応：entry_with_stop_and_targetにdirection引数追加（'long'/'short'）
            position_info/save_trade_historyにdirectionを記録、損益計算を反転対応
            monitor_positions・force_exit_*もposition.sideで自動判定して返済方向を決定
@@ -393,8 +400,9 @@ class TradeExecutor:
             # 注文前のpositionsスナップショット（同銘柄の既存建玉価格を記録）
             try:
                 pre_positions = self.kabu_client.get_positions()
+                # side込みでスナップショット（long/short両建てに対応）
                 pre_position_prices = set(
-                    (p['symbol'], p.get('price', 0))
+                    (p['symbol'], str(p.get('side', '')), p.get('price', 0))
                     for p in pre_positions
                     if p['symbol'] == symbol and (p.get('qty') or 0) > 0
                 )
@@ -452,11 +460,14 @@ class TradeExecutor:
                         # positions差分で新規建玉の実約定価格を特定
                         try:
                             post_positions = self.kabu_client.get_positions()
+                            # 期待される建玉サイド（long=2、short=1）と一致するもののみ
+                            expected_pos_side = '2' if direction == 'long' else '1'
                             new_positions = [
                                 p for p in post_positions
                                 if p['symbol'] == symbol
                                 and (p.get('qty') or 0) > 0
-                                and (p['symbol'], p.get('price', 0)) not in pre_position_prices
+                                and str(p.get('side', '')) == expected_pos_side
+                                and (p['symbol'], str(p.get('side', '')), p.get('price', 0)) not in pre_position_prices
                             ]
                             if new_positions:
                                 actual_entry_price = new_positions[0].get('price')
@@ -1093,6 +1104,16 @@ class TradeExecutor:
         entry_price = pos_info.get('entry_price', 0)
         stop_price = pos_info.get('stop_price', 0)
         target_price = pos_info.get('target_price', 0)
+        direction = pos_info.get('direction', 'long')
+        # ロング決済=売(side='1')、ショート決済=買(side='2')
+        close_side_str = '1' if direction == 'long' else '2'
+
+        def _classify(actual_price):
+            """direction別に利確/損切を判定"""
+            if direction == 'long':
+                return '利確' if actual_price >= entry_price else '損切り'
+            else:
+                return '利確' if actual_price <= entry_price else '損切り'
 
         # 注文IDで絞り込み
         target_ids = {
@@ -1113,20 +1134,14 @@ class TradeExecutor:
                 ]
                 if matched:
                     actual_price = matched[0]['exec_price']
-                    if actual_price >= entry_price:
-                        return actual_price, '利確'
-                    else:
-                        return actual_price, '損切り'
+                    return actual_price, _classify(actual_price)
 
-            # 注文IDで特定できなかった場合、売り・約定済み注文から探す
+            # 注文IDで特定できなかった場合、決済方向の約定済み注文から探す
             for order in orders:
-                if order.get('side') == '1' and order.get('state') == 5 and order.get('exec_price'):
+                if order.get('side') == close_side_str and order.get('state') == 5 and order.get('exec_price'):
                     actual_price = order['exec_price']
-                    logger.warning(f"{symbol}: 注文IDで約定を特定できず。売り約定注文から推定。")
-                    if actual_price >= entry_price:
-                        return actual_price, '利確'
-                    else:
-                        return actual_price, '損切り'
+                    logger.warning(f"{symbol}: [{direction}] 注文IDで約定を特定できず。決済方向の約定注文から推定。")
+                    return actual_price, _classify(actual_price)
 
         except Exception as e:
             logger.warning(f"{symbol}: 注文履歴取得失敗、推測価格を使用: {e}")
@@ -1509,6 +1524,7 @@ class TradeExecutor:
                     'mae_pct': float(row.get('mae_pct', 0)),
                     'entry_vwap_ratio': row.get('entry_vwap_ratio', ''),
                     'entry_pattern': str(row.get('entry_pattern', 'A')),
+                    'direction': str(row.get('direction', 'long')) if row.get('direction') else 'long',
                 })
 
         trade_count = len(trades)
@@ -1611,13 +1627,17 @@ class TradeExecutor:
                 profit_loss_rate = pos.get('profit_loss_rate') or 0
                 logger.info(f"{symbol}: 損益={profit_loss:,.0f}円 ({profit_loss_rate:+.2f}%)")
 
-                # MFE/MAE更新（active_positionsに存在する場合）
+                # MFE/MAE更新（active_positionsに存在する場合・direction別）
                 if symbol in self.active_positions:
                     pos_info = self.active_positions[symbol]
                     entry_price = pos_info.get('entry_price', 0)
                     current_price = pos.get('current_price', 0)
                     if entry_price > 0 and current_price and current_price > 0:
-                        current_pct = (current_price - entry_price) / entry_price * 100
+                        # ロング: 上昇=MFE+、下落=MAE-
+                        # ショート: 下落=MFE+（利益）、上昇=MAE-（不利）→ 符号反転
+                        direction = pos_info.get('direction', 'long')
+                        raw_pct = (current_price - entry_price) / entry_price * 100
+                        current_pct = raw_pct if direction == 'long' else -raw_pct
                         pos_info['mfe_pct'] = max(pos_info.get('mfe_pct', 0), current_pct)
                         pos_info['mae_pct'] = min(pos_info.get('mae_pct', 0), current_pct)
 
@@ -1790,6 +1810,9 @@ class TradeExecutor:
 
     def _is_position_actually_closed(self, symbol, pos_info):
         """get_orders()で実際に約定済みかを確認"""
+        direction = pos_info.get('direction', 'long')
+        # ロング決済=売(side='1')、ショート決済=買(side='2')
+        close_side_str = '1' if direction == 'long' else '2'
         target_ids = {
             pos_info.get('stop_order_id'),
             pos_info.get('target_order_id'),
@@ -1798,8 +1821,8 @@ class TradeExecutor:
         try:
             orders = self.kabu_client.get_orders(symbol=symbol)
             for order in orders:
-                if order.get('state') == 5 and order.get('side') == '1':
-                    # 注文IDが一致するか、売り約定済み注文があれば確定
+                if order.get('state') == 5 and order.get('side') == close_side_str:
+                    # 注文IDが一致するか、決済方向の約定済み注文があれば確定
                     if not target_ids or order.get('order_id') in target_ids:
                         return True
             return False

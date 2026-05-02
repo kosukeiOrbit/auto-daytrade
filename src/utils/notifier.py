@@ -261,6 +261,7 @@ class DiscordNotifier:
                 code = t.get('code', '')
                 name = t.get('symbol_name', '')
                 pattern = t.get('entry_pattern', 'A')
+                direction = t.get('direction', 'long')
                 strength = t.get('material_strength', '')
                 m_type = t.get('material_type', '')
                 entry_time = t.get('entry_time', '')
@@ -277,7 +278,8 @@ class DiscordNotifier:
                 pnl_sign = "+" if pnl >= 0 else ""
                 pct_sign = "+" if pct >= 0 else ""
 
-                content += f"\n**{code} {name}**｜パターン:{pattern}"
+                dir_label = '🔻ショート' if direction == 'short' else 'ロング'
+                content += f"\n**{code} {name}**｜パターン:{pattern}・{dir_label}"
                 if strength:
                     material_info = f"材料:{strength}"
                     if m_type:
