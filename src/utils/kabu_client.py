@@ -222,7 +222,7 @@ class KabuClient:
             logger.debug(f"銘柄情報取得エラー: {e}")
             raise
 
-    def send_order(self, symbol, exchange, side, qty, order_type, price=0, stop_price=0):
+    def send_order(self, symbol, exchange, side, qty, order_type, price=0, stop_price=0, is_new=None):
         """
         注文を発注
 
@@ -235,6 +235,12 @@ class KabuClient:
                         ※注意: APIのFrontOrderTypeは10=成行, 20=指値, 30=逆指値
             price: 指値価格 (成行の場合は0)
             stop_price: 逆指値トリガー価格 (逆指値の場合のみ)
+            is_new: 新規/返済 (True=新規建て、False=返済、None=旧ロジック自動判定)
+                    - ロング新規買: side=2, is_new=True
+                    - ロング返済売: side=1, is_new=False
+                    - ショート新規売: side=1, is_new=True
+                    - ショート返済買: side=2, is_new=False
+                    None指定時は side=2→新規、side=1→返済（後方互換）
 
         Returns:
             dict: {
@@ -258,12 +264,16 @@ class KabuClient:
                 front_order_type_map = {1: 10, 2: 20, 3: 30}
                 front_order_type = front_order_type_map.get(order_type, 10)
 
+            # 後方互換: is_new未指定なら従来ロジック（side=2→新規、side=1→返済）
+            if is_new is None:
+                is_new = (side == 2)
+
             # 信用デイトレード（API経由で手数料・金利・貸株料無料）
-            if side == 2:  # 買い（信用新規）
-                cash_margin = 2   # 信用新規
+            if is_new:
+                cash_margin = 2   # 信用新規（ロング買 or ショート売）
                 deliv_type = 0    # 指定なし
-            else:  # 売り（信用返済）
-                cash_margin = 3   # 信用返済
+            else:
+                cash_margin = 3   # 信用返済（ロング売 or ショート買）
                 deliv_type = 2    # お預り金（返済時必須）
 
             # 注文リクエストボディ

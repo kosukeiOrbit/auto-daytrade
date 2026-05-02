@@ -3,6 +3,11 @@
 candidates_YYYYMMDD.csv を読み込み、エントリー判定・注文実行
 
 変更履歴:
+2026-05-02 ショート対応：entry_with_stop_and_targetにdirection引数追加（'long'/'short'）
+           position_info/save_trade_historyにdirectionを記録、損益計算を反転対応
+           monitor_positions・force_exit_*もposition.sideで自動判定して返済方向を決定
+           execute_pattern_b_short_entry()ヘルパー追加（売建可否チェック付き）
+           kabu_client.send_orderにis_new引数追加（新規/返済を明示指定可能に）
 2026-04-23 パターンAを仮想モード（ドライラン）に切り替え。PATTERN_A_REAL_ENTRY=Falseで注文なし情報収集モード
            気配値GAP・仮想損益をCSV+Discordに記録。update_dry_run.pyで引け後にOHLCV取得・仮想損益計算
            仮想損益判定を損切り優先に変更（日足の順序不明問題・保守的計算）
@@ -327,7 +332,7 @@ class TradeExecutor:
         logger.info(f"ポジションサイズ: {qty}株 (現在値={current_price}円, 予算={usable_budget:,}円)")
         return qty
 
-    def entry_with_stop_and_target(self, symbol, exchange=9, entry_pattern='B'):
+    def entry_with_stop_and_target(self, symbol, exchange=9, entry_pattern='B', direction='long'):
         """
         エントリー + 逆指値・利確注文セット
 
@@ -335,6 +340,7 @@ class TradeExecutor:
             symbol: 銘柄コード
             exchange: 市場コード（デフォルト9=SOR）
             entry_pattern: 'A'=寄り前成行, 'B'=場中指値+1%
+            direction: 'long'=ロング新規買, 'short'=ショート新規売
 
         Returns:
             dict: position_info or None
@@ -366,16 +372,23 @@ class TradeExecutor:
                 logger.warning(f"{symbol}: ポジションサイズが0のためスキップ")
                 return None
 
-            # エントリー注文（パターンA/Bで分岐、どちらも指値）
-            if entry_pattern == 'A':
-                # パターンA: 指値+5%（寄り前に出して寄り付きで約定を狙う）
-                # SOR成行は値幅上限で余力拘束されるため指値を使用
-                limit_price = int(current_price * 1.05)
-                logger.info(f"{symbol}: エントリー注文 {qty}株 @ 指値{limit_price}円（前日終値{current_price}+5%・パターンA）")
-            else:
-                # パターンB: 指値+1%（場中の即約定狙い）
-                limit_price = int(current_price * 1.01)
-                logger.info(f"{symbol}: エントリー注文 {qty}株 @ 指値{limit_price}円（現在値{current_price}+1%・パターンB）")
+            # エントリー注文（パターンA/B × ロング/ショート で分岐、どちらも指値）
+            if direction == 'long':
+                if entry_pattern == 'A':
+                    limit_price = int(current_price * 1.05)
+                    logger.info(f"{symbol}: ロング指値+5% {qty}株 @ {limit_price}円（前日終値{current_price}・パターンA）")
+                else:
+                    limit_price = int(current_price * 1.01)
+                    logger.info(f"{symbol}: ロング指値+1% {qty}株 @ {limit_price}円（現在値{current_price}・パターンB）")
+                entry_side = 2  # 買
+            else:  # short
+                if entry_pattern == 'A':
+                    limit_price = int(current_price * 0.95)
+                    logger.info(f"{symbol}: ショート指値-5% {qty}株 @ {limit_price}円（前日終値{current_price}・パターンA）")
+                else:
+                    limit_price = int(current_price * 0.99)
+                    logger.info(f"{symbol}: ショート指値-1% {qty}株 @ {limit_price}円（現在値{current_price}・パターンB）")
+                entry_side = 1  # 売
 
             # 注文前のpositionsスナップショット（同銘柄の既存建玉価格を記録）
             try:
@@ -394,10 +407,11 @@ class TradeExecutor:
             entry_result = self.kabu_client.send_order(
                 symbol=symbol,
                 exchange=exchange,
-                side=2,
+                side=entry_side,
                 qty=qty,
                 order_type=2,  # 指値
-                price=limit_price
+                price=limit_price,
+                is_new=True  # 新規建て（ロング買 or ショート売）
             )
 
             if entry_result['result_code'] != 0:
@@ -466,31 +480,45 @@ class TradeExecutor:
                     logger.error(f"{symbol}: キャンセル失敗: {cancel_e}")
                 return None
 
-            # 損切り・利確を実際の約定価格基準で計算
-            # 逆指値はAPI非対応（SOR+信用で「即座に発動」エラー多発）のため
-            # 損切り・利確ともmonitor_positions()の監視型で実行
-            stop_price = min(
-                int(round(actual_entry_price * (1 - self.stop_loss_pct / 100))),
-                int(actual_entry_price) - 1
-            )
+            # 損切り・利確を実際の約定価格基準で計算（direction別）
             tp_pct = self.take_profit_pct_a if entry_pattern == 'A' else self.take_profit_pct_b
-            target_price = max(
-                int(round(actual_entry_price * (1 + tp_pct / 100))),
-                int(actual_entry_price) + 1
-            )
-            target_pct = f'+{tp_pct}%'
+            if direction == 'long':
+                # ロング: 損切り=エントリー-1%、利確=エントリー+2%
+                stop_price = min(
+                    int(round(actual_entry_price * (1 - self.stop_loss_pct / 100))),
+                    int(actual_entry_price) - 1
+                )
+                target_price = max(
+                    int(round(actual_entry_price * (1 + tp_pct / 100))),
+                    int(actual_entry_price) + 1
+                )
+                stop_side = 1  # 売（返済）
+                target_pct_str = f'+{tp_pct}%'
+            else:  # short
+                # ショート: 損切り=エントリー+1%、利確=エントリー-2%
+                stop_price = max(
+                    int(round(actual_entry_price * (1 + self.stop_loss_pct / 100))),
+                    int(actual_entry_price) + 1
+                )
+                target_price = min(
+                    int(round(actual_entry_price * (1 - tp_pct / 100))),
+                    int(actual_entry_price) - 1
+                )
+                stop_side = 2  # 買（返済）
+                target_pct_str = f'-{tp_pct}%'
 
-            # 逆指値注文を発注（損切り）
+            # 逆指値注文を発注（損切り）※send_orderのUnderOver自動判定で対応
             stop_order_id = None
             try:
                 stop_result = self.kabu_client.send_order(
                     symbol=symbol,
                     exchange=9,
-                    side=1,       # 売
+                    side=stop_side,
                     qty=qty,
                     order_type=3, # 逆指値
                     price=0,
-                    stop_price=stop_price
+                    stop_price=stop_price,
+                    is_new=False  # 返済（ロング売 or ショート買）
                 )
                 if stop_result.get('result_code') == 0:
                     stop_order_id = stop_result.get('order_id')
@@ -501,7 +529,8 @@ class TradeExecutor:
                 logger.warning(f"{symbol}: 逆指値注文エラー → 監視型にフォールバック: {e}")
             target_order_id = None  # 利確は監視型
 
-            logger.info(f"{symbol}: 損切={stop_price}円(-1%) 利確={target_price}円({target_pct}) ※逆指値{'成功' if stop_order_id else '失敗→監視型'}）")
+            sl_pct_str = f'-{self.stop_loss_pct}%' if direction == 'long' else f'+{self.stop_loss_pct}%'
+            logger.info(f"{symbol}: [{direction}] 損切={stop_price}円({sl_pct_str}) 利確={target_price}円({target_pct_str}) ※逆指値{'成功' if stop_order_id else '失敗→監視型'}")
 
             # エントリー時のVWAP・始値を取得（分析用）
             entry_vwap = symbol_info.get('vwap')
@@ -519,6 +548,7 @@ class TradeExecutor:
                 'stop_price': stop_price,
                 'target_price': target_price,
                 'entry_time': datetime.now(),
+                'direction': direction,  # 'long' or 'short'
                 'material_strength': self.pattern_b_candidate_info.get(symbol, {}).get('material_strength', ''),
                 'material_type': self.pattern_b_candidate_info.get(symbol, {}).get('material_type', ''),
                 'volume_surge': 0.0,
@@ -1153,38 +1183,46 @@ class TradeExecutor:
         try:
             positions = self.kabu_client.get_positions()
 
-            # 分割約定で同一銘柄が複数行返るため、銘柄ごとに集約
+            # 分割約定で同一銘柄が複数行返るため、銘柄ごとに集約（side別に集約）
             aggregated = {}
             for pos in positions:
                 symbol = pos['symbol']
                 qty = pos.get('qty') or 0
                 if qty <= 0:
                     continue
-                if symbol not in aggregated:
-                    aggregated[symbol] = {'qty': 0, 'current_price': pos.get('current_price'), 'price': pos.get('price'), 'profit_loss': 0}
-                aggregated[symbol]['qty'] += qty
-                aggregated[symbol]['profit_loss'] += pos.get('profit_loss') or 0
+                # kabuの position の Side: '2'=買建（long）, '1'=売建（short）
+                pos_side = str(pos.get('side', '2'))
+                key = (symbol, pos_side)
+                if key not in aggregated:
+                    aggregated[key] = {'qty': 0, 'current_price': pos.get('current_price'), 'price': pos.get('price'), 'profit_loss': 0, 'pos_side': pos_side}
+                aggregated[key]['qty'] += qty
+                aggregated[key]['profit_loss'] += pos.get('profit_loss') or 0
 
-            for symbol, agg in aggregated.items():
+            for (symbol, pos_side), agg in aggregated.items():
                 qty = agg['qty']
                 profit_loss = agg['profit_loss']
+                # 建玉サイドから決済サイドを決定
+                # 買建(2) → 返済売り(1)、売建(1) → 返済買い(2)
+                close_side = 1 if pos_side == '2' else 2
+                direction = 'long' if pos_side == '2' else 'short'
 
                 # 含み損の場合のみ決済
                 if profit_loss < 0:
-                    logger.warning(f"{symbol}: 含み損 {profit_loss:,.0f}円 ({qty}株) → 前場引け強制決済")
+                    logger.warning(f"{symbol}: [{direction}] 含み損 {profit_loss:,.0f}円 ({qty}株) → 前場引け強制決済")
 
                     # 既存の逆指値・利確指値をキャンセル
                     pos_info = self.active_positions.get(symbol, {})
                     self._cancel_existing_orders(symbol, pos_info)
 
-                    # 成行売り注文
+                    # 成行返済注文
                     result = self.kabu_client.send_order(
                         symbol=symbol,
                         exchange=9,
-                        side=1,  # 1=売
+                        side=close_side,
                         qty=qty,
                         order_type=1,  # 1=成行
-                        price=0
+                        price=0,
+                        is_new=False  # 返済
                     )
 
                     # result_codeチェック
@@ -1241,36 +1279,41 @@ class TradeExecutor:
                 logger.info("決済対象ポジションなし")
                 return
 
-            # 分割約定で同一銘柄が複数行返るため、銘柄ごとに集約
+            # 分割約定で同一銘柄が複数行返るため、銘柄ごとに集約（side別）
             aggregated = {}
             for pos in positions:
                 symbol = pos['symbol']
                 qty = pos.get('qty') or 0
                 if qty <= 0:
                     continue
-                if symbol not in aggregated:
-                    aggregated[symbol] = {'qty': 0, 'current_price': pos.get('current_price'), 'price': pos.get('price'), 'profit_loss': 0}
-                aggregated[symbol]['qty'] += qty
-                aggregated[symbol]['profit_loss'] += pos.get('profit_loss') or 0
+                pos_side = str(pos.get('side', '2'))
+                key = (symbol, pos_side)
+                if key not in aggregated:
+                    aggregated[key] = {'qty': 0, 'current_price': pos.get('current_price'), 'price': pos.get('price'), 'profit_loss': 0, 'pos_side': pos_side}
+                aggregated[key]['qty'] += qty
+                aggregated[key]['profit_loss'] += pos.get('profit_loss') or 0
 
-            for symbol, agg in aggregated.items():
+            for (symbol, pos_side), agg in aggregated.items():
                 qty = agg['qty']
                 profit_loss = agg['profit_loss']
+                close_side = 1 if pos_side == '2' else 2  # 買建→売返済 / 売建→買返済
+                direction = 'long' if pos_side == '2' else 'short'
 
-                logger.info(f"{symbol}: 損益={profit_loss:,.0f}円 ({qty}株) → 大引け前強制決済")
+                logger.info(f"{symbol}: [{direction}] 損益={profit_loss:,.0f}円 ({qty}株) → 大引け前強制決済")
 
                 # 既存の逆指値・利確指値をキャンセル
                 pos_info = self.active_positions.get(symbol, {})
                 self._cancel_existing_orders(symbol, pos_info)
 
-                # 成行売り注文
+                # 成行返済注文
                 result = self.kabu_client.send_order(
                     symbol=symbol,
                     exchange=9,
-                    side=1,  # 1=売
+                    side=close_side,
                     qty=qty,
                     order_type=1,  # 1=成行
-                    price=0
+                    price=0,
+                    is_new=False
                 )
 
                 # result_codeチェック
@@ -1324,8 +1367,17 @@ class TradeExecutor:
             filepath = "data/trade_history.csv"
             os.makedirs("data", exist_ok=True)
 
-            profit_loss = (exit_price - entry_price) * qty
-            profit_pct = (exit_price - entry_price) / entry_price * 100 if entry_price > 0 else 0
+            # active_positionsからcandidate情報を取得（先に取得してdirection判定に使用）
+            pos_info = self.active_positions.get(symbol, {})
+            direction = pos_info.get('direction', 'long')
+
+            # 損益計算（direction別）
+            if direction == 'long':
+                profit_loss = (exit_price - entry_price) * qty
+                profit_pct = (exit_price - entry_price) / entry_price * 100 if entry_price > 0 else 0
+            else:
+                profit_loss = (entry_price - exit_price) * qty
+                profit_pct = (entry_price - exit_price) / entry_price * 100 if entry_price > 0 else 0
 
             # 安全装置カウンター更新
             self.daily_profit_loss += profit_loss
@@ -1335,8 +1387,6 @@ class TradeExecutor:
                 self.consecutive_losses += 1
             logger.info(f"安全装置更新: 日次損益={self.daily_profit_loss:+,.0f}円, 連敗={self.consecutive_losses}回")
 
-            # active_positionsからcandidate情報を取得
-            pos_info = self.active_positions.get(symbol, {})
             material_strength = pos_info.get('material_strength', '')
             material_type = pos_info.get('material_type', '')
             volume_surge = pos_info.get('volume_surge', 0.0)
@@ -1382,6 +1432,7 @@ class TradeExecutor:
                 'entry_gap_pct': entry_gap_pct if entry_gap_pct is not None else '',
                 'opening_gap_pct': opening_gap_pct if opening_gap_pct is not None else '',
                 'entry_source': entry_source,
+                'direction': direction,
             }
 
             df_new = pd.DataFrame([record])
@@ -1576,9 +1627,18 @@ class TradeExecutor:
                 cp = pos_data.get('current_price') or 0
                 if cp <= 0:
                     continue
-                # 利確判定（+2%到達で成行売り）
-                if cp >= target_price:
-                    logger.info(f"{symbol}: 利確条件到達（現在値{cp} >= 目標{target_price}）→ 成行売り")
+                # 利確判定（direction別: long=+2%上抜け, short=-2%下抜け）
+                direction = pos_info.get('direction', 'long')
+                if direction == 'long':
+                    tp_hit = cp >= target_price
+                    exit_side = 1  # 売（返済）
+                else:
+                    tp_hit = cp <= target_price
+                    exit_side = 2  # 買（返済）
+
+                if tp_hit:
+                    cmp_str = '>=' if direction == 'long' else '<='
+                    logger.info(f"{symbol}: [{direction}] 利確条件到達（現在値{cp} {cmp_str} 目標{target_price}）→ 成行返済")
                     qty = pos_info.get('qty')
                     try:
                         # 逆指値注文があれば先にキャンセル（建玉ロック解除）
@@ -1590,20 +1650,24 @@ class TradeExecutor:
                             except Exception as e:
                                 logger.warning(f"{symbol}: 逆指値キャンセル失敗（手動確認推奨）: {e}")
                         result = self.kabu_client.send_order(
-                            symbol=symbol, exchange=9, side=1, qty=qty,
-                            order_type=1, price=0
+                            symbol=symbol, exchange=9, side=exit_side, qty=qty,
+                            order_type=1, price=0, is_new=False
                         )
                         if result.get('result_code') != 0:
                             logger.error(f"{symbol}: 利確注文失敗（result_code={result.get('result_code')}）→ 監視継続")
-                            self.notifier.send_error(f"⚠️ {symbol}: 利確注文失敗（ストップ高等）！監視継続中")
+                            self.notifier.send_error(f"⚠️ {symbol}: 利確注文失敗！監視継続中")
                             continue
                         exit_price = self._wait_for_exit_fill(result.get('order_id'), symbol, cp)
                         entry_price = pos_info.get('entry_price', 0)
-                        profit_loss = (exit_price - entry_price) * qty if entry_price else 0
+                        # 損益: long=(exit-entry)*qty, short=(entry-exit)*qty
+                        if direction == 'long':
+                            profit_loss = (exit_price - entry_price) * qty if entry_price else 0
+                        else:
+                            profit_loss = (entry_price - exit_price) * qty if entry_price else 0
                         self.save_trade_history(symbol, entry_price, exit_price, qty, '利確')
                         del self.active_positions[symbol]
-                        logger.info(f"{symbol}: 利確決済完了 {entry_price}円→{exit_price}円（{profit_loss:+,.0f}円）")
-                        self.notifier.send_message(f"✅ {symbol}: 利確決済 {entry_price}円→{exit_price}円（{profit_loss:+,.0f}円）")
+                        logger.info(f"{symbol}: [{direction}] 利確決済完了 {entry_price}円→{exit_price}円（{profit_loss:+,.0f}円）")
+                        self.notifier.send_message(f"✅ {symbol}: 利確決済 [{direction}] {entry_price}円→{exit_price}円（{profit_loss:+,.0f}円）")
                         # 利確後も当日中の再エントリーを禁止
                         self.entry_blacklist.add(symbol)
                         logger.info(f"{symbol}: 利確後ブラックリスト追加（当日中再エントリー禁止）")
@@ -1626,39 +1690,54 @@ class TradeExecutor:
                             entry_price = pos_info.get('entry_price', 0)
                             exit_price = stop_order.get('exec_price') or pos_info.get('stop_price', 0)
                             qty = pos_info.get('qty')
-                            pnl = (exit_price - entry_price) * qty
-                            logger.info(f"{symbol}: 逆指値約定確認（{exit_price}円 損益{pnl:+,.0f}円）")
+                            direction = pos_info.get('direction', 'long')
+                            if direction == 'long':
+                                pnl = (exit_price - entry_price) * qty
+                            else:
+                                pnl = (entry_price - exit_price) * qty
+                            logger.info(f"{symbol}: [{direction}] 逆指値約定確認（{exit_price}円 損益{pnl:+,.0f}円）")
                             self.save_trade_history(symbol, entry_price, exit_price, qty, '損切り')
                             self.entry_blacklist.add(symbol)
                             del self.active_positions[symbol]
-                            self.notifier.send_message(f"✂️ {symbol}: 損切り（逆指値）{entry_price}円→{exit_price}円（{pnl:+,.0f}円）")
+                            self.notifier.send_message(f"✂️ {symbol}: 損切り（逆指値・{direction}）{entry_price}円→{exit_price}円（{pnl:+,.0f}円）")
                             break
                         elif stop_order and stop_order.get('state') in [3, 4]:
                             continue
                     except Exception as e:
                         logger.warning(f"{symbol}: 逆指値状態確認失敗 → 監視型にフォールバック: {e}")
 
-                # 損切り判定（-1%到達で成行売り）※逆指値が無い or 失敗時のフォールバック
+                # 損切り判定（direction別）※逆指値が無い or 失敗時のフォールバック
                 stop_price = pos_info.get('stop_price')
-                if stop_price and cp <= stop_price:
-                    logger.info(f"{symbol}: 損切り条件到達（現在値{cp} <= 損切{stop_price}）→ 成行売り")
+                direction = pos_info.get('direction', 'long')
+                if direction == 'long':
+                    sl_hit = stop_price and cp <= stop_price
+                    exit_side = 1  # 売（返済）
+                else:
+                    sl_hit = stop_price and cp >= stop_price
+                    exit_side = 2  # 買（返済）
+                if sl_hit:
+                    cmp_str = '<=' if direction == 'long' else '>='
+                    logger.info(f"{symbol}: [{direction}] 損切り条件到達（現在値{cp} {cmp_str} 損切{stop_price}）→ 成行返済")
                     qty = pos_info.get('qty')
                     try:
                         result = self.kabu_client.send_order(
-                            symbol=symbol, exchange=9, side=1, qty=qty,
-                            order_type=1, price=0
+                            symbol=symbol, exchange=9, side=exit_side, qty=qty,
+                            order_type=1, price=0, is_new=False
                         )
                         if result.get('result_code') != 0:
                             logger.error(f"{symbol}: 損切注文失敗（result_code={result.get('result_code')}）→ 監視継続")
-                            self.notifier.send_error(f"⚠️ {symbol}: 損切注文失敗（ストップ安等）！監視継続中")
+                            self.notifier.send_error(f"⚠️ {symbol}: 損切注文失敗！監視継続中")
                             continue
                         exit_price = self._wait_for_exit_fill(result.get('order_id'), symbol, cp)
                         entry_price = pos_info.get('entry_price', 0)
-                        profit_loss = (exit_price - entry_price) * qty if entry_price else 0
+                        if direction == 'long':
+                            profit_loss = (exit_price - entry_price) * qty if entry_price else 0
+                        else:
+                            profit_loss = (entry_price - exit_price) * qty if entry_price else 0
                         self.save_trade_history(symbol, entry_price, exit_price, qty, '損切り')
                         del self.active_positions[symbol]
-                        logger.info(f"{symbol}: 損切り決済完了 {entry_price}円→{exit_price}円（{profit_loss:+,.0f}円）")
-                        self.notifier.send_message(f"✂️ {symbol}: 損切り決済 {entry_price}円→{exit_price}円（{profit_loss:+,.0f}円）")
+                        logger.info(f"{symbol}: [{direction}] 損切り決済完了 {entry_price}円→{exit_price}円（{profit_loss:+,.0f}円）")
+                        self.notifier.send_message(f"✂️ {symbol}: 損切り決済 [{direction}] {entry_price}円→{exit_price}円（{profit_loss:+,.0f}円）")
                         # 損切り後は当日中の再エントリーを禁止
                         self.entry_blacklist.add(symbol)
                         logger.info(f"{symbol}: 損切り後ブラックリスト追加（当日中再エントリー禁止）")
@@ -2063,5 +2142,19 @@ class TradeExecutor:
         return True
 
     def execute_pattern_b_entry(self, symbol):
-        """パターンBのエントリーを実行（entry_with_stop_and_targetに委譲）"""
-        return self.entry_with_stop_and_target(symbol, entry_pattern='B')
+        """パターンBのエントリーを実行（ロング・entry_with_stop_and_targetに委譲）"""
+        return self.entry_with_stop_and_target(symbol, entry_pattern='B', direction='long')
+
+    def execute_pattern_b_short_entry(self, symbol):
+        """パターンBのショートエントリーを実行（entry_with_stop_and_targetに委譲）"""
+        # 売建可否チェック（デイトレ信用）
+        try:
+            margin = self.kabu_client.get_margin_premium(symbol)
+            if not margin.get('short_available_daytrade'):
+                logger.info(f"{symbol}: デイトレ信用売建不可 → ショートエントリーをスキップ")
+                self.entry_blacklist.add(symbol)
+                return None
+        except Exception as e:
+            logger.warning(f"{symbol}: 売建可否確認失敗 → スキップ: {e}")
+            return None
+        return self.entry_with_stop_and_target(symbol, entry_pattern='B', direction='short')
