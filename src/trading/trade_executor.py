@@ -1242,7 +1242,7 @@ class TradeExecutor:
                     if entry_price == 0:
                         logger.warning(f"{symbol}: entry_price取得失敗のためtrade_history保存をスキップ")
                     else:
-                        self.save_trade_history(symbol, entry_price, exit_price, qty, '前場強制')
+                        self.save_trade_history(symbol, entry_price, exit_price, qty, '前場強制', direction=direction)
 
                     # Discord通知
                     self.notifier.send_trade_notification(
@@ -1334,7 +1334,7 @@ class TradeExecutor:
                 if entry_price == 0:
                     logger.warning(f"{symbol}: entry_price取得失敗のためtrade_history保存をスキップ")
                 else:
-                    self.save_trade_history(symbol, entry_price, exit_price, qty, exit_reason)
+                    self.save_trade_history(symbol, entry_price, exit_price, qty, exit_reason, direction=direction)
 
                 # Discord通知
                 self.notifier.send_trade_notification(
@@ -1352,7 +1352,7 @@ class TradeExecutor:
         except Exception as e:
             logger.error(f"大引け前強制決済エラー: {e}")
 
-    def save_trade_history(self, symbol, entry_price, exit_price, qty, exit_reason):
+    def save_trade_history(self, symbol, entry_price, exit_price, qty, exit_reason, direction=None):
         """
         トレード結果をCSVに追記保存
 
@@ -1369,7 +1369,9 @@ class TradeExecutor:
 
             # active_positionsからcandidate情報を取得（先に取得してdirection判定に使用）
             pos_info = self.active_positions.get(symbol, {})
-            direction = pos_info.get('direction', 'long')
+            # direction引数優先 → active_positions → デフォルトlong
+            if direction is None:
+                direction = pos_info.get('direction', 'long')
 
             # 損益計算（direction別）
             if direction == 'long':
@@ -1584,15 +1586,21 @@ class TradeExecutor:
                             # 0株残骸だが生きた建玉がある → スキップ（誤検知防止）
                             continue
                         pos_info = self.active_positions[symbol]
+                        direction = pos_info.get('direction', 'long')
                         entry_price = pos_info.get('entry_price', 0)
                         exit_price = pos.get('current_price') or pos.get('price') or entry_price
                         exit_qty = pos_info.get('qty', 0)
-                        pnl = (exit_price - entry_price) * exit_qty if entry_price and exit_price else 0
-                        pnl_pct = (exit_price / entry_price - 1) * 100 if entry_price and exit_price and entry_price > 0 else 0
-                        logger.info(f"{symbol}: 逆指値約定検知（0株・全建玉決済済み）→ 損益{pnl:+,.0f}円（{pnl_pct:+.1f}%）")
-                        self.save_trade_history(symbol, entry_price, exit_price, exit_qty, '損切り')
+                        # 損益（direction別）
+                        if direction == 'long':
+                            pnl = (exit_price - entry_price) * exit_qty if entry_price and exit_price else 0
+                            pnl_pct = (exit_price / entry_price - 1) * 100 if entry_price and exit_price and entry_price > 0 else 0
+                        else:
+                            pnl = (entry_price - exit_price) * exit_qty if entry_price and exit_price else 0
+                            pnl_pct = (entry_price / exit_price - 1) * 100 if entry_price and exit_price and exit_price > 0 else 0
+                        logger.info(f"{symbol}: [{direction}] 逆指値約定検知（0株・全建玉決済済み）→ 損益{pnl:+,.0f}円（{pnl_pct:+.1f}%）")
+                        self.save_trade_history(symbol, entry_price, exit_price, exit_qty, '損切り', direction=direction)
                         self.notifier.send_message(
-                            f"✂️ {symbol}: 損切り決済 {entry_price}円→{exit_price}円（{pnl:+,.0f}円 / {pnl_pct:+.1f}%）"
+                            f"✂️ {symbol}: 損切り決済 [{direction}] {entry_price}円→{exit_price}円（{pnl:+,.0f}円 / {pnl_pct:+.1f}%）"
                         )
                         del self.active_positions[symbol]
                         self.entry_blacklist.add(symbol)
@@ -1664,7 +1672,7 @@ class TradeExecutor:
                             profit_loss = (exit_price - entry_price) * qty if entry_price else 0
                         else:
                             profit_loss = (entry_price - exit_price) * qty if entry_price else 0
-                        self.save_trade_history(symbol, entry_price, exit_price, qty, '利確')
+                        self.save_trade_history(symbol, entry_price, exit_price, qty, '利確', direction=direction)
                         del self.active_positions[symbol]
                         logger.info(f"{symbol}: [{direction}] 利確決済完了 {entry_price}円→{exit_price}円（{profit_loss:+,.0f}円）")
                         self.notifier.send_message(f"✅ {symbol}: 利確決済 [{direction}] {entry_price}円→{exit_price}円（{profit_loss:+,.0f}円）")
@@ -1696,7 +1704,7 @@ class TradeExecutor:
                             else:
                                 pnl = (entry_price - exit_price) * qty
                             logger.info(f"{symbol}: [{direction}] 逆指値約定確認（{exit_price}円 損益{pnl:+,.0f}円）")
-                            self.save_trade_history(symbol, entry_price, exit_price, qty, '損切り')
+                            self.save_trade_history(symbol, entry_price, exit_price, qty, '損切り', direction=direction)
                             self.entry_blacklist.add(symbol)
                             del self.active_positions[symbol]
                             self.notifier.send_message(f"✂️ {symbol}: 損切り（逆指値・{direction}）{entry_price}円→{exit_price}円（{pnl:+,.0f}円）")
@@ -1734,7 +1742,7 @@ class TradeExecutor:
                             profit_loss = (exit_price - entry_price) * qty if entry_price else 0
                         else:
                             profit_loss = (entry_price - exit_price) * qty if entry_price else 0
-                        self.save_trade_history(symbol, entry_price, exit_price, qty, '損切り')
+                        self.save_trade_history(symbol, entry_price, exit_price, qty, '損切り', direction=direction)
                         del self.active_positions[symbol]
                         logger.info(f"{symbol}: [{direction}] 損切り決済完了 {entry_price}円→{exit_price}円（{profit_loss:+,.0f}円）")
                         self.notifier.send_message(f"✂️ {symbol}: 損切り決済 [{direction}] {entry_price}円→{exit_price}円（{profit_loss:+,.0f}円）")
