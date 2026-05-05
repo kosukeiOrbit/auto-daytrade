@@ -45,6 +45,11 @@ PATTERN_B_ENABLED = True
 # False = 仮想モード（注文せず情報収集のみ）
 PATTERN_A_REAL_ENTRY = False
 
+# パターンA ショート戦略（GAP+0.5%以上の中で出来高急増倍率最大の1銘柄をショート）
+# True  = ドライラン後に1銘柄リアルショートエントリー
+# False = ショートも仮想（ドライランのみ）
+PATTERN_A_SHORT_ENABLED = True
+
 # ログファイル設定
 log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)
@@ -327,6 +332,22 @@ def main():
             logger.error(error_msg)
             if PATTERN_A_REAL_ENTRY:
                 notifier.send_error(f"⚠️ {error_msg}\nポジションが残っている可能性があります。取引監視ループは継続します。")
+
+        # STEP 5b: ショートエントリー（ドライランCSVから1銘柄選定）
+        if PATTERN_A_SHORT_ENABLED:
+            logger.info("=" * 60)
+            logger.info("パターンA ショートエントリー（GAP+0.5%以上 × 最大出来高急増倍率）")
+            logger.info("=" * 60)
+            try:
+                short_pos = executor.select_short_candidate_and_entry()
+                if short_pos:
+                    logger.success(f"ショートエントリー成功: {short_pos.get('entry_price')}円")
+                else:
+                    logger.info("ショート候補なし（条件満たす銘柄なし）")
+            except Exception as e:
+                error_msg = f"ショートエントリーエラー: {e}"
+                logger.error(error_msg)
+                notifier.send_error(f"⚠️ {error_msg}")
     else:
         logger.info("候補CSVなし → パターンAエントリーをスキップ")
 

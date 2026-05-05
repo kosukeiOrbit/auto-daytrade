@@ -2192,3 +2192,105 @@ class TradeExecutor:
             logger.warning(f"{symbol}: 売建可否確認失敗 → スキップ: {e}")
             return None
         return self.entry_with_stop_and_target(symbol, entry_pattern='A', direction='short')
+
+    def select_short_candidate_and_entry(self, date_str=None):
+        """
+        ドライランCSVから条件を満たす最適なショート候補を1銘柄選定してエントリー
+
+        選定条件:
+        - GAPフィルタ通過（GAP+0.5%〜+2%）
+        - デイトレ信用売建可能
+        - 株価200円以上
+        - 売買代金5億円以上
+        選定ロジック: VolumeSurgeRatio最大の1銘柄
+        （ドライラン4日中4勝0敗・+32,750円のバックテスト結果に基づく）
+
+        Args:
+            date_str: 'YYYYMMDD' 形式（省略時は今日）
+
+        Returns:
+            dict: position_info or None
+        """
+        if date_str is None:
+            date_str = datetime.now().strftime('%Y%m%d')
+
+        csv_path = f"data/dry_run_{date_str}.csv"
+        if not os.path.exists(csv_path):
+            logger.warning(f"ショート候補選定: ドライランCSVなし {csv_path}")
+            return None
+
+        try:
+            df = pd.read_csv(csv_path, encoding='utf-8-sig')
+        except Exception as e:
+            logger.error(f"ショート候補選定: CSV読み込み失敗: {e}")
+            return None
+
+        if len(df) == 0:
+            logger.info("ショート候補選定: 候補なし")
+            return None
+
+        # フィルタ
+        df = df[df['GapFilterResult'] == '通過'].copy()
+        if len(df) == 0:
+            logger.info("ショート候補選定: GAPフィルタ通過銘柄なし")
+            return None
+
+        # PreGapPct >= 0.5%
+        df['PreGapPct'] = pd.to_numeric(df['PreGapPct'], errors='coerce')
+        df = df[df['PreGapPct'] >= 0.5]
+        if len(df) == 0:
+            logger.info("ショート候補選定: GAP+0.5%以上の銘柄なし")
+            return None
+
+        # デイトレ信用売建可能（CSVに記録されていれば使用、無ければ後でAPIチェック）
+        if 'ShortAvailableDayTrade' in df.columns:
+            df = df[df['ShortAvailableDayTrade'].astype(str).str.lower() == 'true']
+            if len(df) == 0:
+                logger.info("ショート候補選定: デイトレ信用売建可能銘柄なし")
+                return None
+
+        # 株価200円以上（既にドライラン段階で除外されているはずだが念のため）
+        df['VirtualEntryPrice'] = pd.to_numeric(df['VirtualEntryPrice'], errors='coerce')
+        df = df[df['VirtualEntryPrice'] >= 200]
+        # 売買代金5億円以上
+        df['TradingValue'] = pd.to_numeric(df['TradingValue'], errors='coerce')
+        df = df[df['TradingValue'] >= 500_000_000]
+        if len(df) == 0:
+            logger.info("ショート候補選定: 株価/売買代金フィルタ後ゼロ件")
+            return None
+
+        # 出来高急増倍率最大の1銘柄
+        df['VolumeSurgeRatio'] = pd.to_numeric(df['VolumeSurgeRatio'], errors='coerce')
+        df = df.sort_values('VolumeSurgeRatio', ascending=False)
+
+        selected = df.iloc[0]
+        symbol = str(selected['Code'])[:4]
+
+        logger.info("=" * 60)
+        logger.info("ショート候補選定")
+        logger.info("=" * 60)
+        logger.info(
+            f"選定: {symbol} {selected.get('SymbolName', '')} "
+            f"GAP{selected['PreGapPct']:+.1f}% "
+            f"Vol{selected['VolumeSurgeRatio']:.1f}倍 "
+            f"売買代金{selected['TradingValue']/1e8:.0f}億"
+        )
+        # 候補一覧（参考）
+        for _, row in df.head(5).iterrows():
+            logger.info(
+                f"  候補: {str(row['Code'])[:4]} {row.get('SymbolName', ''):20s} "
+                f"GAP{row['PreGapPct']:+.1f}% Vol{row['VolumeSurgeRatio']:.1f}倍"
+            )
+
+        # Discord通知
+        try:
+            self.notifier.send_message(
+                f"🔻 ショートエントリー候補選定\n"
+                f"{symbol} {selected.get('SymbolName', '')}\n"
+                f"GAP{selected['PreGapPct']:+.1f}% / Vol{selected['VolumeSurgeRatio']:.1f}倍 / "
+                f"売買代金{selected['TradingValue']/1e8:.0f}億"
+            )
+        except Exception as e:
+            logger.warning(f"Discord通知失敗: {e}")
+
+        return self.execute_pattern_a_short_entry(symbol)
